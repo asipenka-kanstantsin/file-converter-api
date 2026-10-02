@@ -1248,6 +1248,208 @@ paths:
         default:
           $ref: '#/components/responses/Default'
 
+  /api/transformations/history:
+    get:
+      operationId: transformations_ownHistory
+      tags: [transformations]
+      summary: One's own conversion history
+      description: |
+        Every conversion attempt (success or error), newest first, cursor-paginated. Rows past the
+        retention period are not listed (they are deleted shortly). A cursor is tied to the filters
+        it was issued for. `downloadable` says whether a saved result can be downloaded.
+      security:
+        - accessCookie: []
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor from the previous page.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 1000
+        - name: limit
+          in: query
+          required: false
+          description: Page size.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: type
+          in: query
+          required: false
+          description: Only file or only image conversions.
+          schema:
+            type: string
+            enum: [file, image]
+        - name: sourceFormat
+          in: query
+          required: false
+          description: Only conversions from this format.
+          schema:
+            type: string
+            enum: [csv, jpeg, json, png, svg, xml, yaml]
+        - name: targetFormat
+          in: query
+          required: false
+          description: Only conversions to this format.
+          schema:
+            type: string
+            enum: [csv, jpeg, json, png, svg, xml, yaml]
+        - name: status
+          in: query
+          required: false
+          description: Only successful or only failed attempts.
+          schema:
+            type: string
+            enum: [success, error]
+        - name: createdAtFrom
+          in: query
+          required: false
+          description: From this instant (inclusive). ISO-8601 with an offset (Z or ±hh:mm), at most millisecond precision, UTC year 1–9999.
+          schema:
+            type: string
+            format: date-time
+        - name: createdAtTo
+          in: query
+          required: false
+          description: Up to this instant (inclusive); not before createdAtFrom. ISO-8601 with an offset (Z or ±hh:mm), at most millisecond precision, UTC year 1–9999.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: One page of history, newest first.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryPage'
+        '400':
+          description: Invalid parameters or cursor.
+          x-error-codes: [PAGINATION_CURSOR_INVALID, VALIDATION_FAILED]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOrValidationEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/admin/users/{userId}/transformations/history:
+    get:
+      operationId: admin_userHistory
+      tags: [transformations]
+      summary: A user's conversion history
+      description: |
+        Every conversion attempt (success or error), newest first, cursor-paginated. Rows past the
+        retention period are not listed (they are deleted shortly). A cursor is tied to the filters
+        it was issued for. `downloadable` says whether a saved result can be downloaded.
+      x-permission: transformations@history
+      security:
+        - accessCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor from the previous page.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 1000
+        - name: limit
+          in: query
+          required: false
+          description: Page size.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: type
+          in: query
+          required: false
+          description: Only file or only image conversions.
+          schema:
+            type: string
+            enum: [file, image]
+        - name: sourceFormat
+          in: query
+          required: false
+          description: Only conversions from this format.
+          schema:
+            type: string
+            enum: [csv, jpeg, json, png, svg, xml, yaml]
+        - name: targetFormat
+          in: query
+          required: false
+          description: Only conversions to this format.
+          schema:
+            type: string
+            enum: [csv, jpeg, json, png, svg, xml, yaml]
+        - name: status
+          in: query
+          required: false
+          description: Only successful or only failed attempts.
+          schema:
+            type: string
+            enum: [success, error]
+        - name: createdAtFrom
+          in: query
+          required: false
+          description: From this instant (inclusive). ISO-8601 with an offset (Z or ±hh:mm), at most millisecond precision, UTC year 1–9999.
+          schema:
+            type: string
+            format: date-time
+        - name: createdAtTo
+          in: query
+          required: false
+          description: Up to this instant (inclusive); not before createdAtFrom. ISO-8601 with an offset (Z or ±hh:mm), at most millisecond precision, UTC year 1–9999.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: One page of history, newest first.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryPage'
+        '400':
+          description: Invalid parameters or cursor.
+          x-error-codes: [PAGINATION_CURSOR_INVALID, VALIDATION_FAILED]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOrValidationEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UserNotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
   /api/admin/rbac/roles:
     get:
       operationId: rbac_listRoles
@@ -2712,6 +2914,51 @@ components:
             type: array
             items:
               type: string
+
+    HistoryItem:
+      type: object
+      additionalProperties: false
+      required: [id, type, sourceFormat, targetFormat, status, fileSize, durationMs, errorCode, createdAt, downloadable]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [file, image]
+        sourceFormat:
+          type: [string, 'null']
+          description: Null when the format could not be determined.
+        targetFormat:
+          type: string
+        status:
+          type: string
+          enum: [success, error]
+        fileSize:
+          type: integer
+          description: Size of the input in bytes.
+        durationMs:
+          type: integer
+        errorCode:
+          type: [string, 'null']
+          description: The error code when `status` is `error`.
+        createdAt:
+          type: string
+          format: date-time
+        downloadable:
+          type: boolean
+          description: A saved result exists and has not expired.
+    HistoryPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/HistoryItem'
+        nextCursor:
+          type: [string, 'null']
 
     ErrorOrValidationEnvelope:
       anyOf:

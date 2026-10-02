@@ -4,6 +4,7 @@ import { HttpStatus } from '@nestjs/common';
 import { z } from 'zod';
 
 import { AppException, ErrorCode } from '@/common/errors';
+import { isExactInstant } from '@/common/validation';
 
 import { type UserStatus, userStatusSchema } from './users.types';
 
@@ -22,11 +23,6 @@ export interface UserListQuery {
 
 // The sort key of the last row returned, plus the parameters it is valid for: a cursor carried
 // over to other filters or another order would silently skip or repeat rows (decision L2).
-// The sort key as the query renders it: an ISO-8601 UTC instant (or `-infinity`, a never-signed-
-// in account under last_login), or an e-mail. A forged key never reaches a SQL cast.
-const TIMESTAMP_KEY =
-  /^(-infinity|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/;
-
 const cursorSchema = z
   .object({
     id: z.uuid(),
@@ -46,14 +42,7 @@ const cursorSchema = z
 
 // The shape, and a real instant that round-trips exactly (no 30 February, no hour 25, no year 0).
 function isTimestampKey(key: string): boolean {
-  if (!TIMESTAMP_KEY.test(key)) return false;
-  if (key === '-infinity') return true;
-  const date = new Date(key);
-  return (
-    !Number.isNaN(date.getTime()) &&
-    date.getUTCFullYear() >= 1 &&
-    date.toISOString() === key
-  );
+  return key === '-infinity' || isExactInstant(key);
 }
 
 // The search text as the cursor carries it.
