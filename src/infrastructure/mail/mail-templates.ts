@@ -7,6 +7,7 @@ export interface RenderedMail {
 }
 
 const CONFIRMATION_SUBJECTS = {
+  login: 'Confirm your sign-in',
   registration: 'Confirm your registration',
 } as const;
 
@@ -14,7 +15,7 @@ const confirmationVarsSchema = z.object({
   code: z.string().regex(/^\d{6}$/),
   expiresInMinutes: z.number().int().positive(),
   link: z.url(),
-  purpose: z.enum(['registration']),
+  purpose: z.enum(['login', 'registration']),
 });
 
 function escapeHtml(value: string): string {

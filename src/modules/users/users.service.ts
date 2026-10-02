@@ -3,7 +3,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { AppException, ErrorCode } from '@/common/errors';
 
 import { UsersRepository } from './users.repository';
-import type { NewUser, User } from './users.types';
+import type { NewUser, User, UserCredentials } from './users.types';
 
 @Injectable()
 export class UsersService {
@@ -21,6 +21,27 @@ export class UsersService {
       );
     }
     return user;
+  }
+
+  // A user who must still be able to sign in: deleted or unconfirmed meanwhile → the pending
+  // confirmation is void.
+  async getActive(id: string): Promise<User> {
+    const user = await this.usersRepository.findById(id);
+    if (user?.status !== 'active') {
+      throw new AppException(
+        ErrorCode.AUTH_CHALLENGE_INVALID,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    return user;
+  }
+
+  findCredentialsByEmail(email: string): Promise<UserCredentials | null> {
+    return this.usersRepository.findCredentialsByEmail(email);
+  }
+
+  recordLogin(id: string): Promise<void> {
+    return this.usersRepository.recordLogin(id);
   }
 
   // Decision A13: an unconfirmed account cannot hold an e-mail longer than one confirmation

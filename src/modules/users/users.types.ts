@@ -12,6 +12,11 @@ export interface User {
   tokenVersion: number;
 }
 
+export interface UserCredentials {
+  passwordHash: string;
+  user: User;
+}
+
 export interface NewUser {
   email: string;
   passwordHash: string;

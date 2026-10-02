@@ -76,9 +76,9 @@ One `challenges` table serves every confirmable action (decision A4):
 | --- | --- | --- |
 | `GET /csrf` | public | sets `csrf_token`, 204 |
 | `POST /register` | public | confirmation off → 201 + user, cookies set; on → 202 `{ requiresConfirmation: true, challengeId }`, user `pending_verification` |
-| `POST /login` | public | confirmation off → 200 + user, cookies set; on → 202 `{ requiresConfirmation: true, challengeId }`, no cookies |
-| `POST /confirm` | public | `{ challengeId, code }` → completes the challenge's action (registration / login set cookies) |
-| `GET /confirm?token=` | public | magic-link variant of `POST /confirm` |
+| `POST /login` | public, `LoginLockout` (A15) | confirmation off → 200 + user, cookies set; on → 202 `{ requiresConfirmation: true, challengeId, expiresAt }`, no cookies; wrong e-mail/password → 401 (A16), unconfirmed registration → 403 |
+| `POST /confirm` | public | `{ challengeId, code }` → completes the challenge's action; a `login` challenge also sets the session cookies, a `registration` one does not |
+| `GET /confirm?token=` | public | magic-link variant of `POST /confirm`; a sign-in link needs the `login_challenge` cookie of the browser that started it (A17) |
 | `POST /confirm/resend` | public | `{ challengeId }` → 202 |
 | `POST /refresh` | public (refresh cookie) | validates the refresh JWT, issues a new pair, 204 |
 | `POST /logout` | authenticated | clears cookies, 204 |
@@ -156,7 +156,7 @@ if (!isSelf && !this.rbac.can(actor, "users", "read")) {
 
 | Endpoint | Limit (default) | Tracker |
 | --- | --- | --- |
-| login | 5 / min, 20 / hour | IP + normalised email |
+| login — `LoginLockout`, failures only | 5 failures / min, then blocked 15 min (A15) | IP + normalised email |
 | register, password/forgot, confirm/resend — `@RateLimit('mail')` | 3 / min (`THROTTLE_MAIL_LIMIT`) | IP |
 | confirm (code and link), password/reset — `@RateLimit('confirm')` | 10 / min (`THROTTLE_CONFIRM_LIMIT`) | IP |
 | refresh | 30 / min | IP |

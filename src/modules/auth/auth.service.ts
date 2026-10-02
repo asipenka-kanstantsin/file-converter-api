@@ -1,28 +1,46 @@
 import { Transactional } from '@nestjs-cls/transactional';
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 
-import { AppException } from '@/common/errors';
+import { AppException, ErrorCode } from '@/common/errors';
 import { AppConfig } from '@/config';
 import { mapPrismaException } from '@/infrastructure/database';
 import { SettingsService } from '@/modules/settings';
 import { type User, UsersService } from '@/modules/users';
 
 import { ChallengesService } from './challenges.service';
-import type { Challenge, IssuedChallenge } from './challenges.types';
+import type {
+  Challenge,
+  ChallengePurpose,
+  IssuedChallenge,
+} from './challenges.types';
+import type { LoginInput } from './dto/login.dto';
 import type { RegisterInput } from './dto/register.dto';
+import { LoginLockout } from './login-lockout';
 import { PasswordHasher } from './password-hasher';
+import { type SessionTokens, SessionTokenService } from './session-tokens';
 
 export type RegisterResult =
   | { challenge: IssuedChallenge; kind: 'confirmation_required'; user: User }
   | { kind: 'registered'; user: User };
+
+export type LoginResult =
+  | { challenge: IssuedChallenge; kind: 'confirmation_required'; user: User }
+  | { kind: 'signed_in'; session: SessionTokens; user: User };
+
+// A confirmed sign-in carries a session; a confirmed registration does not (decision A9).
+export interface ConfirmResult {
+  session?: SessionTokens;
+  user: User;
+}
 
 function failureReason(error: unknown): string {
   if (error instanceof AppException) return error.code;
   return mapPrismaException(error)?.code ?? 'unexpected';
 }
 
-// Audit events of Notion "Регистрация" 1.5 are logged here, after the transaction committed;
-// requests rejected before the service (validation, CSRF, rate limit) are logged by the filter.
+// Audit events of Notion "Регистрация" / "Аутентификация" 1.5 are logged here, after the
+// transaction committed; requests rejected before the service (validation, CSRF, rate limit) are
+// logged by the filter. E-mails are never logged — user ids are.
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -30,7 +48,9 @@ export class AuthService {
   constructor(
     private readonly challenges: ChallengesService,
     private readonly config: AppConfig,
+    private readonly lockout: LoginLockout,
     private readonly passwordHasher: PasswordHasher,
+    private readonly sessionTokens: SessionTokenService,
     private readonly settings: SettingsService,
     private readonly users: UsersService,
   ) {}
@@ -57,31 +77,112 @@ export class AuthService {
     return result;
   }
 
-  async confirmWithCode(challengeId: string, code: string): Promise<User> {
+  // Notion "Аутентификация" 1.2: confirmation off → tokens; on → no tokens, a pending sign-in
+  // (challenge with purpose `login`) and an e-mailed code and link.
+  async login(input: LoginInput, clientIp: string): Promise<LoginResult> {
+    const attempt = this.lockout.begin(
+      LoginLockout.keyOf(clientIp, input.email),
+    );
+    let credentials: Awaited<
+      ReturnType<UsersService['findCredentialsByEmail']>
+    >;
+    try {
+      credentials = await this.users.findCredentialsByEmail(input.email);
+      const valid = await this.passwordHasher.verify(
+        credentials?.passwordHash,
+        input.password,
+      );
+      if (!credentials || !valid) {
+        attempt.fail();
+        this.logger.warn(
+          {
+            reason: ErrorCode.AUTH_INVALID_CREDENTIALS,
+            userId: credentials?.user.id,
+          },
+          'login failed',
+        );
+        throw new AppException(
+          ErrorCode.AUTH_INVALID_CREDENTIALS,
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
+      // The password is proven from here on: not a guessing attempt.
+      attempt.succeed();
+    } finally {
+      attempt.release();
+    }
+    const { user } = credentials;
+    if (user.status !== 'active') {
+      this.logger.warn(
+        { reason: ErrorCode.AUTH_ACCOUNT_NOT_VERIFIED, userId: user.id },
+        'login failed',
+      );
+      throw new AppException(
+        ErrorCode.AUTH_ACCOUNT_NOT_VERIFIED,
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    if (await this.settings.isEnabled('confirmation.login')) {
+      const challenge = await this.startConfirmedLogin(user);
+      this.logger.log({ userId: user.id }, 'login pending confirmation');
+      this.logConfirmationSent(challenge.challengeId, user.id);
+      return { challenge, kind: 'confirmation_required', user };
+    }
+    const session = await this.signIn(user);
+    this.logger.log({ userId: user.id }, 'login succeeded');
+    return { kind: 'signed_in', session, user };
+  }
+
+  async confirmWithCode(
+    challengeId: string,
+    code: string,
+  ): Promise<ConfirmResult> {
     return this.confirm({ challengeId, method: 'code' }, () =>
       this.challenges.verifyCode(challengeId, code),
     );
   }
 
-  async confirmWithToken(token: string): Promise<User> {
-    return this.confirm({ method: 'link' }, () =>
-      this.challenges.verifyToken(token),
-    );
+  // `boundChallengeId` is the `login_challenge` cookie of the browser that opened the link.
+  async confirmWithToken(
+    token: string,
+    boundChallengeId: string | undefined,
+  ): Promise<ConfirmResult> {
+    return this.confirm({ method: 'link' }, async () => {
+      const challenge = await this.challenges.verifyToken(token);
+      // Login CSRF guard (decision A17): a sign-in link never signs a different browser in.
+      if (challenge.purpose === 'login' && challenge.id !== boundChallengeId) {
+        throw new AppException(
+          ErrorCode.AUTH_CHALLENGE_OTHER_BROWSER,
+          HttpStatus.FORBIDDEN,
+        );
+      }
+      return challenge;
+    });
   }
 
-  async resendConfirmation(challengeId: string): Promise<IssuedChallenge> {
+  async resendConfirmation(
+    challengeId: string,
+  ): Promise<IssuedChallenge & { purpose: ChallengePurpose }> {
     const issued = await this.rotate(challengeId);
     this.logConfirmationSent(issued.challengeId, issued.userId);
-    return { challengeId: issued.challengeId, expiresAt: issued.expiresAt };
+    return {
+      challengeId: issued.challengeId,
+      expiresAt: issued.expiresAt,
+      purpose: issued.purpose,
+    };
   }
 
   private async confirm(
     fields: Readonly<Record<string, string>>,
     verify: () => Promise<Challenge>,
-  ): Promise<User> {
+  ): Promise<ConfirmResult> {
     try {
       const challenge = await verify();
       const user = await this.complete(challenge);
+      const result: ConfirmResult =
+        challenge.purpose === 'login'
+          ? { session: await this.sessionTokens.issue(user), user }
+          : { user };
       this.logger.log(
         {
           ...fields,
@@ -91,7 +192,10 @@ export class AuthService {
         },
         'confirmation succeeded',
       );
-      return user;
+      if (challenge.purpose === 'login') {
+        this.logger.log({ userId: user.id }, 'login succeeded');
+      }
+      return result;
     } catch (error: unknown) {
       this.logger.warn(
         { ...fields, reason: failureReason(error) },
@@ -104,7 +208,19 @@ export class AuthService {
   @Transactional()
   private async complete(challenge: Challenge): Promise<User> {
     await this.challenges.consume(challenge);
-    return this.users.activate(challenge.user.id);
+    if (challenge.purpose === 'registration') {
+      return this.users.activate(challenge.user.id);
+    }
+    const user = await this.users.getActive(challenge.user.id);
+    // Password reset, deletion or a block since the sign-in started void it (decision A2).
+    if (challenge.tokenVersion !== user.tokenVersion) {
+      throw new AppException(
+        ErrorCode.AUTH_CHALLENGE_INVALID,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    await this.users.recordLogin(user.id);
+    return user;
   }
 
   @Transactional()
@@ -132,7 +248,17 @@ export class AuthService {
   @Transactional()
   private async rotate(
     challengeId: string,
-  ): Promise<IssuedChallenge & { userId: string }> {
+  ): Promise<IssuedChallenge & { purpose: ChallengePurpose; userId: string }> {
     return this.challenges.resend(challengeId);
+  }
+
+  private async signIn(user: User): Promise<SessionTokens> {
+    await this.users.recordLogin(user.id);
+    return this.sessionTokens.issue(user);
+  }
+
+  @Transactional()
+  private async startConfirmedLogin(user: User): Promise<IssuedChallenge> {
+    return this.challenges.issue('login', user);
   }
 }

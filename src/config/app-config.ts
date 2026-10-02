@@ -9,8 +9,12 @@ export class AppConfig {
     trustProxy: number;
   };
   readonly auth!: {
+    accessSecret: string;
+    accessTtlSeconds: number;
     cookieSecure: boolean;
     otpPepper: string;
+    refreshSecret: string;
+    refreshTtlSeconds: number;
   };
   readonly confirmation!: {
     maxAttempts: number;
@@ -33,6 +37,8 @@ export class AppConfig {
   readonly throttle!: {
     confirmLimit: number;
     limit: number;
+    loginBlockSeconds: number;
+    loginLimit: number;
     mailLimit: number;
     ttlSeconds: number;
   };
@@ -48,8 +54,12 @@ export function buildAppConfig(env: Env): AppConfig {
       trustProxy: env.APP_TRUST_PROXY,
     }),
     auth: Object.freeze({
+      accessSecret: env.AUTH_JWT_ACCESS_SECRET,
+      accessTtlSeconds: env.AUTH_ACCESS_TTL_SECONDS,
       cookieSecure: env.AUTH_COOKIE_SECURE,
       otpPepper: env.AUTH_OTP_PEPPER,
+      refreshSecret: env.AUTH_JWT_REFRESH_SECRET,
+      refreshTtlSeconds: env.AUTH_REFRESH_TTL_SECONDS,
     }),
     confirmation: Object.freeze({
       maxAttempts: env.CONFIRMATION_MAX_ATTEMPTS,
@@ -75,6 +85,8 @@ export function buildAppConfig(env: Env): AppConfig {
     throttle: Object.freeze({
       confirmLimit: env.THROTTLE_CONFIRM_LIMIT,
       limit: env.THROTTLE_LIMIT,
+      loginBlockSeconds: env.THROTTLE_LOGIN_BLOCK_SECONDS,
+      loginLimit: env.THROTTLE_LOGIN_LIMIT,
       mailLimit: env.THROTTLE_MAIL_LIMIT,
       ttlSeconds: env.THROTTLE_TTL_SECONDS,
     }),

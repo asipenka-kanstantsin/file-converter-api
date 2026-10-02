@@ -33,12 +33,18 @@ export class ChallengesService {
   // Inside the caller's transaction: the row and its mail commit together.
   async issue(
     purpose: ChallengePurpose,
-    user: { email: string; id: string },
+    user: { email: string; id: string; tokenVersion?: number },
   ): Promise<IssuedChallenge> {
     const { code, secrets, token } = this.newSecrets();
+    if (purpose === 'login') {
+      await this.challengesRepository.voidPending(user.id, purpose);
+    }
     const row = await this.challengesRepository.create(
       purpose,
-      user.id,
+      {
+        id: user.id,
+        tokenVersion: purpose === 'login' ? user.tokenVersion : undefined,
+      },
       secrets,
     );
     await this.sendMail(
@@ -55,7 +61,7 @@ export class ChallengesService {
   // Inside the caller's transaction: the rotation and its mail commit together.
   async resend(
     challengeId: string,
-  ): Promise<IssuedChallenge & { userId: string }> {
+  ): Promise<IssuedChallenge & { purpose: ChallengePurpose; userId: string }> {
     const challenge = await this.findPending(challengeId);
     const cooldownMs = this.config.confirmation.resendCooldownSeconds * 1000;
     const { code, secrets, token } = this.newSecrets();
@@ -93,6 +99,7 @@ export class ChallengesService {
     return {
       challengeId,
       expiresAt: secrets.expiresAt,
+      purpose: challenge.purpose,
       userId: challenge.user.id,
     };
   }

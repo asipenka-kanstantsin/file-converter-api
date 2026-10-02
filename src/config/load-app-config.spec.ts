@@ -3,6 +3,8 @@ import { InvalidConfigError, parseAppConfig } from './load-app-config';
 const validEnv = {
   APP_CORS_ORIGINS: 'https://app.example.com, https://admin.example.com',
   APP_PUBLIC_URL: 'https://api.example.com/',
+  AUTH_JWT_ACCESS_SECRET: 'a'.repeat(32),
+  AUTH_JWT_REFRESH_SECRET: 'r'.repeat(32),
   AUTH_OTP_PEPPER: 'p'.repeat(32),
   DATABASE_URL: 'postgresql://app:app@localhost:5432/app',
   MAIL_FROM: 'File Converter <no-reply@example.com>',
@@ -40,6 +42,8 @@ describe('parseAppConfig', () => {
     expect(config.throttle).toEqual({
       confirmLimit: 10,
       limit: 100,
+      loginBlockSeconds: 900,
+      loginLimit: 5,
       mailLimit: 3,
       ttlSeconds: 60,
     });
@@ -98,6 +102,12 @@ describe('parseAppConfig', () => {
         NODE_ENV: 'development',
       }).app.corsOrigins,
     ).toEqual(['http://localhost:3000']);
+  });
+
+  it('refuses identical access and refresh secrets in production', () => {
+    expect(() =>
+      parseAppConfig({ ...validEnv, AUTH_JWT_REFRESH_SECRET: 'a'.repeat(32) }),
+    ).toThrow(/AUTH_JWT_REFRESH_SECRET/);
   });
 
   it('requires secure cookies and SMTP credentials in production', () => {

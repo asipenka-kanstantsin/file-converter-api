@@ -1,4 +1,4 @@
-export type ChallengePurpose = 'registration';
+export type ChallengePurpose = 'login' | 'registration';
 
 export interface Challenge {
   attempts: number;
@@ -8,6 +8,7 @@ export interface Challenge {
   id: string;
   lastSentAt: Date;
   purpose: ChallengePurpose;
+  tokenVersion: number | null;
   user: { email: string; id: string };
 }
 

@@ -4,7 +4,7 @@ import { Injectable } from '@nestjs/common';
 
 import type { PrismaService } from '@/infrastructure/database';
 
-import type { NewUser, User } from './users.types';
+import type { NewUser, User, UserCredentials } from './users.types';
 
 const userSelect = {
   createdAt: true,
@@ -60,6 +60,24 @@ export class UsersRepository {
       where: { email },
     });
     return row !== null;
+  }
+
+  async findCredentialsByEmail(email: string): Promise<UserCredentials | null> {
+    const row = await this.txHost.tx.user.findUnique({
+      select: { ...userSelect, passwordHash: true },
+      where: { email },
+    });
+    if (!row) return null;
+    const { passwordHash, ...user } = row;
+    return { passwordHash, user };
+  }
+
+  async recordLogin(id: string): Promise<void> {
+    await this.txHost.tx.user.update({
+      data: { lastLoginAt: new Date() },
+      select: { id: true },
+      where: { id },
+    });
   }
 
   async findById(id: string): Promise<User | null> {

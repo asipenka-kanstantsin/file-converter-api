@@ -19,6 +19,7 @@ const challengeSelect = {
   id: true,
   lastSentAt: true,
   purpose: true,
+  tokenVersion: true,
   user: { select: { email: true, id: true } },
 } as const;
 
@@ -45,7 +46,7 @@ export class ChallengesRepository {
 
   async create(
     purpose: ChallengePurpose,
-    userId: string,
+    user: { id: string; tokenVersion?: number },
     secrets: ChallengeSecrets,
   ): Promise<{ expiresAt: Date; id: string }> {
     return this.txHost.tx.challenge.create({
@@ -55,9 +56,18 @@ export class ChallengesRepository {
         lastSentAt: secrets.sentAt,
         purpose,
         tokenHash: secrets.tokenHash,
-        userId,
+        tokenVersion: user.tokenVersion ?? null,
+        userId: user.id,
       },
       select: { expiresAt: true, id: true },
+    });
+  }
+
+  // A new sign-in voids the user's earlier pending sign-ins: one live code and link at a time.
+  async voidPending(userId: string, purpose: ChallengePurpose): Promise<void> {
+    await this.txHost.tx.challenge.updateMany({
+      data: { consumedAt: new Date() },
+      where: { consumedAt: null, purpose, userId },
     });
   }
 

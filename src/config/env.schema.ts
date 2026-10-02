@@ -30,8 +30,12 @@ export const envSchema = z
     APP_PORT: z.coerce.number().int().min(1).max(65_535).default(3001),
     APP_PUBLIC_URL: z.url(),
     APP_TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+    AUTH_ACCESS_TTL_SECONDS: positiveInt.default(900),
     AUTH_COOKIE_SECURE: booleanString.default(true),
+    AUTH_JWT_ACCESS_SECRET: z.string().min(32),
+    AUTH_JWT_REFRESH_SECRET: z.string().min(32),
     AUTH_OTP_PEPPER: z.string().min(32),
+    AUTH_REFRESH_TTL_SECONDS: positiveInt.default(2_592_000),
     CONFIRMATION_MAX_ATTEMPTS: positiveInt.default(5),
     CONFIRMATION_RESEND_COOLDOWN_SECONDS: positiveInt.default(60),
     CONFIRMATION_TTL_SECONDS: positiveInt.default(600),
@@ -49,6 +53,8 @@ export const envSchema = z
     SMTP_USER: optionalSecret,
     THROTTLE_CONFIRM_LIMIT: positiveInt.default(10),
     THROTTLE_LIMIT: positiveInt.default(100),
+    THROTTLE_LOGIN_BLOCK_SECONDS: positiveInt.default(900),
+    THROTTLE_LOGIN_LIMIT: positiveInt.default(5),
     THROTTLE_MAIL_LIMIT: positiveInt.default(3),
     THROTTLE_TTL_SECONDS: positiveInt.default(60),
   })
@@ -63,6 +69,13 @@ export const envSchema = z
           path: ['APP_CORS_ORIGINS'],
         });
       }
+    }
+    if (env.AUTH_JWT_ACCESS_SECRET === env.AUTH_JWT_REFRESH_SECRET) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'jwt_secrets_must_differ',
+        path: ['AUTH_JWT_REFRESH_SECRET'],
+      });
     }
     if (!env.AUTH_COOKIE_SECURE) {
       ctx.addIssue({

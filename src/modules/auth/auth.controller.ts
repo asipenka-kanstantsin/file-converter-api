@@ -6,10 +6,12 @@ import {
   HttpStatus,
   Post,
   Query,
+  Req,
   Res,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { ZodSerializerDto } from 'nestjs-zod';
+import { z } from 'zod';
 
 import {
   CSRF_COOKIE,
@@ -24,7 +26,7 @@ import {
   type UserResponse,
 } from '@/modules/users';
 
-import { AuthService } from './auth.service';
+import { AuthService, type ConfirmResult } from './auth.service';
 import type { IssuedChallenge } from './challenges.types';
 import { ConfirmWithCodeDto } from './dto/confirm-with-code.dto';
 import { ConfirmWithLinkQueryDto } from './dto/confirm-with-link-query.dto';
@@ -32,9 +34,18 @@ import {
   type ConfirmationRequired,
   ConfirmationRequiredDto,
 } from './dto/confirmation-required.dto';
-import { registerResultSchema } from './dto/register-result.dto';
+import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResendConfirmationDto } from './dto/resend-confirmation.dto';
+import { userOrConfirmationSchema } from './dto/user-or-confirmation.dto';
+import { LOGIN_BINDING_COOKIE, SessionCookies } from './session-cookies';
+
+const bindingCookieSchema = z.object({ [LOGIN_BINDING_COOKIE]: z.string() });
+
+function boundChallengeId(request: Request): string | undefined {
+  const parsed = bindingCookieSchema.safeParse(request.cookies);
+  return parsed.success ? parsed.data[LOGIN_BINDING_COOKIE] : undefined;
+}
 
 function confirmationRequired(
   challenge: IssuedChallenge,
@@ -51,6 +62,7 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly config: AppConfig,
+    private readonly sessionCookies: SessionCookies,
   ) {}
 
   @Get('confirm')
@@ -58,10 +70,13 @@ export class AuthController {
   @ZodSerializerDto(UserEnvelopeDto)
   async confirmWithLink(
     @Query() { token }: ConfirmWithLinkQueryDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<{ user: UserResponse }> {
-    return {
-      user: toUserResponse(await this.authService.confirmWithToken(token)),
-    };
+    return this.confirmed(
+      await this.authService.confirmWithToken(token, boundChallengeId(request)),
+      response,
+    );
   }
 
   @Post('confirm')
@@ -70,9 +85,12 @@ export class AuthController {
   @ZodSerializerDto(UserEnvelopeDto)
   async confirmWithCode(
     @Body() { challengeId, code }: ConfirmWithCodeDto,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<{ user: UserResponse }> {
-    const user = await this.authService.confirmWithCode(challengeId, code);
-    return { user: toUserResponse(user) };
+    return this.confirmed(
+      await this.authService.confirmWithCode(challengeId, code),
+      response,
+    );
   }
 
   @Get('csrf')
@@ -85,9 +103,27 @@ export class AuthController {
     );
   }
 
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  @ZodSerializerDto(userOrConfirmationSchema)
+  async login(
+    @Body() input: LoginDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<ConfirmationRequired | { user: UserResponse }> {
+    const result = await this.authService.login(input, request.ip ?? 'unknown');
+    if (result.kind === 'signed_in') {
+      this.sessionCookies.set(response, result.session);
+      return { user: toUserResponse(result.user) };
+    }
+    response.status(HttpStatus.ACCEPTED);
+    this.sessionCookies.bindLogin(response, result.challenge.challengeId);
+    return confirmationRequired(result.challenge);
+  }
+
   @Post('register')
   @RateLimit('mail')
-  @ZodSerializerDto(registerResultSchema)
+  @ZodSerializerDto(userOrConfirmationSchema)
   async register(
     @Body() input: RegisterDto,
     @Res({ passthrough: true }) response: Response,
@@ -107,9 +143,28 @@ export class AuthController {
   @ZodSerializerDto(ConfirmationRequiredDto)
   async resendConfirmation(
     @Body() { challengeId }: ResendConfirmationDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<ConfirmationRequired> {
-    return confirmationRequired(
-      await this.authService.resendConfirmation(challengeId),
-    );
+    const issued = await this.authService.resendConfirmation(challengeId);
+    // The resend restarts the 10-minute window; the browser binding must last as long (A17).
+    if (
+      issued.purpose === 'login' &&
+      boundChallengeId(request) === challengeId
+    ) {
+      this.sessionCookies.bindLogin(response, challengeId);
+    }
+    return confirmationRequired(issued);
+  }
+
+  private confirmed(
+    result: ConfirmResult,
+    response: Response,
+  ): { user: UserResponse } {
+    if (result.session) {
+      this.sessionCookies.set(response, result.session);
+      this.sessionCookies.clearLoginBinding(response);
+    }
+    return { user: toUserResponse(result.user) };
   }
 }

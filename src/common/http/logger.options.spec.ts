@@ -12,6 +12,8 @@ function config(pretty: boolean): AppConfig {
   return parseAppConfig({
     APP_CORS_ORIGINS: 'http://localhost:3000',
     APP_PUBLIC_URL: 'http://localhost:3001',
+    AUTH_JWT_ACCESS_SECRET: 'a'.repeat(32),
+    AUTH_JWT_REFRESH_SECRET: 'r'.repeat(32),
     AUTH_OTP_PEPPER: 'x'.repeat(32),
     DATABASE_URL: 'postgresql://app:app@localhost:5432/app',
     LOG_LEVEL: 'warn',

@@ -29,7 +29,7 @@ tags:
   - name: system
     description: Health checks and the API contract itself.
   - name: auth
-    description: Registration, e-mail confirmation (OTP or magic link) and CSRF.
+    description: Registration, sign-in, e-mail confirmation (OTP or magic link) and CSRF.
 security: []
 
 paths:
@@ -193,6 +193,82 @@ paths:
         default:
           $ref: '#/components/responses/Default'
 
+  /api/auth/login:
+    post:
+      operationId: auth_login
+      tags: [auth]
+      summary: Sign in with e-mail and password
+      description: |
+        When e-mail confirmation for sign-in is off (admin setting), the session cookies
+        `access_token` (15 min) and `refresh_token` (30 days) are set (200). When it is on, no
+        cookies are set: a code and a magic link are e-mailed (202) and the session is issued by
+        `POST /api/auth/confirm` or `GET /api/auth/confirm?token=`.
+
+        Wrong e-mail and wrong password answer the same 401. Only failed attempts count: five
+        failures for one client IP and e-mail within a minute block that pair for 15 minutes
+        (429 + `Retry-After`); a successful sign-in resets the count.
+
+        With confirmation on, the 202 also sets `login_challenge` (HttpOnly, `Path=/api/auth/confirm`):
+        the magic link signs in only in this browser.
+      security:
+        - csrfHeader: []
+          csrfCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Signed in; session cookies set.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              $ref: '#/components/headers/SetSessionCookies'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '202':
+          description: Sign-in pending; a code and a magic link were e-mailed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              $ref: '#/components/headers/SetLoginBindingCookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmationRequired'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          description: Unknown e-mail or wrong password (indistinguishable).
+          x-error-codes: [AUTH_INVALID_CREDENTIALS]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: CSRF check failed, or the account's registration is not confirmed yet.
+          x-error-codes: [AUTH_ACCOUNT_NOT_VERIFIED, CSRF_INVALID]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
   /api/auth/confirm:
     post:
       operationId: auth_confirmWithCode
@@ -225,6 +301,12 @@ paths:
       tags: [auth]
       summary: Confirm a pending action with the e-mailed magic link
       parameters:
+        - name: login_challenge
+          in: cookie
+          required: false
+          description: Set by `POST /api/auth/login`; required to confirm a sign-in by link.
+          schema:
+            $ref: '#/components/schemas/ChallengeId'
         - name: token
           in: query
           required: true
@@ -235,6 +317,18 @@ paths:
           $ref: '#/components/responses/Confirmed'
         '400':
           $ref: '#/components/responses/ConfirmationFailed'
+        '403':
+          description: >-
+            A sign-in link opened in a different browser than the one that started the sign-in
+            (no matching `login_challenge` cookie). Use that browser, or the code.
+          x-error-codes: [AUTH_CHALLENGE_OTHER_BROWSER]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '423':
           $ref: '#/components/responses/ChallengeLocked'
         '429':
@@ -261,7 +355,21 @@ paths:
               $ref: '#/components/schemas/ResendConfirmationRequest'
       responses:
         '202':
-          $ref: '#/components/responses/ConfirmationRequired'
+          description: >-
+            A new code and link were e-mailed. For a sign-in resent from the browser that holds its
+            `login_challenge` cookie, the cookie is renewed for the new 10 minutes.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              description: Renewed `login_challenge` cookie (sign-ins from the bound browser only).
+              schema:
+                type: string
+                pattern: '^login_challenge=[0-9a-f-]{36};.*HttpOnly'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmationRequired'
         '400':
           description: Invalid input or no pending challenge with this id.
           x-error-codes: [AUTH_CHALLENGE_INVALID, VALIDATION_FAILED]
@@ -293,6 +401,21 @@ components:
       description: Must equal the `csrf_token` cookie (double submit).
 
   headers:
+    SetSessionCookies:
+      description: >-
+        `access_token=<JWT>; Path=/api; HttpOnly; SameSite=Lax` (15 min) and
+        `refresh_token=<JWT>; Path=/api/auth/refresh; HttpOnly; SameSite=Lax` (30 days); `Secure`
+        outside local development.
+      required: true
+      schema:
+        type: string
+        pattern: '^(access|refresh)_token=[\w-]+\.[\w-]+\.[\w-]+;.*HttpOnly'
+    SetLoginBindingCookie:
+      description: '`login_challenge=<challengeId>; Path=/api/auth/confirm; HttpOnly; SameSite=Lax` (10 min).'
+      required: true
+      schema:
+        type: string
+        pattern: '^login_challenge=[0-9a-f-]{36};.*HttpOnly'
     SetCsrfCookie:
       description: '`csrf_token=<random>; Path=/; SameSite=Lax` (not HttpOnly, so the client can echo it).'
       required: true
@@ -335,10 +458,13 @@ components:
       type: string
       description: Stable machine-readable error code. Clients branch on it, never on `detail`.
       enum:
+        - AUTH_ACCOUNT_NOT_VERIFIED
         - AUTH_CHALLENGE_EXPIRED
         - AUTH_CHALLENGE_INVALID
         - AUTH_CHALLENGE_LOCKED
+        - AUTH_CHALLENGE_OTHER_BROWSER
         - AUTH_CODE_INVALID
+        - AUTH_INVALID_CREDENTIALS
         - CONFLICT
         - CSRF_INVALID
         - INTERNAL_ERROR
@@ -459,6 +585,18 @@ components:
       maxLength: 128
       description: 8–128 characters with at least one letter and one digit.
       writeOnly: true
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          $ref: '#/components/schemas/Email'
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+          writeOnly: true
 
     RegisterRequest:
       type: object
@@ -585,7 +723,9 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
     ConfirmationRequired:
-      description: A code and a magic link were e-mailed; confirmation is required.
+      description: >-
+        A code and a magic link were e-mailed; the registration or sign-in completes after
+        confirmation.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/RequestId'
@@ -594,10 +734,17 @@ components:
           schema:
             $ref: '#/components/schemas/ConfirmationRequired'
     Confirmed:
-      description: The pending action is complete.
+      description: >-
+        The pending action is complete. Confirming a sign-in also sets the session cookies
+        (`Set-Cookie` as for `POST /api/auth/login`); confirming a registration sets none.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/RequestId'
+        Set-Cookie:
+          description: Session cookies, only when a sign-in was confirmed.
+          schema:
+            type: string
+            pattern: '^(access|refresh)_token=[\w-]+\.[\w-]+\.[\w-]+;.*HttpOnly'
       content:
         application/json:
           schema:

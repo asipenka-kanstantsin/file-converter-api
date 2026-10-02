@@ -3,13 +3,18 @@ import { ErrorCode } from './error-code';
 // Single supported locale (decision H4). Every ErrorCode has exactly one message; the
 // error-messages spec fails when a code is missing.
 export const ERROR_MESSAGES = {
+  [ErrorCode.AUTH_ACCOUNT_NOT_VERIFIED]:
+    'Confirm your registration from the e-mail before signing in.',
   [ErrorCode.AUTH_CHALLENGE_EXPIRED]:
     'The confirmation has expired. Request a new code.',
   [ErrorCode.AUTH_CHALLENGE_INVALID]:
     'The confirmation is invalid or has already been used.',
   [ErrorCode.AUTH_CHALLENGE_LOCKED]:
     'Too many wrong codes. Request a new code.',
+  [ErrorCode.AUTH_CHALLENGE_OTHER_BROWSER]:
+    'Open the sign-in link in the browser where you started signing in, or enter the code.',
   [ErrorCode.AUTH_CODE_INVALID]: 'The code is incorrect.',
+  [ErrorCode.AUTH_INVALID_CREDENTIALS]: 'The e-mail or password is incorrect.',
   [ErrorCode.CONFLICT]: 'The request conflicts with the current state.',
   [ErrorCode.CSRF_INVALID]: 'The request is missing a valid CSRF token.',
   [ErrorCode.INTERNAL_ERROR]: 'Something went wrong. Please try again later.',
