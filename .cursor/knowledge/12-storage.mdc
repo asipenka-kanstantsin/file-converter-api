@@ -22,11 +22,14 @@ infrastructure/storage/
 export interface StoragePort {
   deleteObject(key: string): Promise<void>;
   getObject(key: string): Promise<null | { body: Readable; contentType: string; size: number }>;
-  putObject(key: string, body: Buffer | Readable, opts: { contentType: string; size: number }): Promise<void>;
+  putObject(key: string, body: Buffer, opts: { contentType: string }): Promise<void>;
 }
 ```
 
-Modules depend on `StoragePort` (through the `files` module service), never on an SDK or `fs`.
+Modules depend on `StoragePort` (through `FilesService` in `modules/files`), never on an SDK or
+`fs`. Backend failures are `StorageUnavailableError` → 500 `STORAGE_UNAVAILABLE`
+(`mapStorageException`). Uploads go through `SingleFileUpload(field, maxBytes)` in
+`common/http/upload.ts` (multer, memory, size enforced while streaming).
 Swapping the driver is a config change: Notion asks that the abstraction hide the backend.
 
 ## Drivers
@@ -77,11 +80,20 @@ Notion: "прямая ссылка на файл не раскрывается" 
 - The response DTO exposes an **API path**, never a storage URL: profile `photo` is
   `/api/users/{userId}/photo` or `null`; history items expose `downloadable: boolean`.
 - The download endpoint checks the permission in the service, then `getObject` and pipes the
-  stream into a `StreamableFile` with `Content-Type`, `Content-Length` and
-  `Content-Disposition: attachment; filename*=UTF-8''<encoded original_name>`.
+  stream through `streamFile()` (`common/http/streaming.ts`) with `Content-Type`,
+  `Content-Length` and `Content-Disposition: attachment; filename*=UTF-8''<encoded original_name>`
+  (profile photos: `inline`, they are shown in an `<img>`). A stream error before the first byte
+  answers the 500 envelope, after it aborts the connection.
 - Missing object while the row exists (desync) → log `error`, return 404; storage unavailable →
   500 `STORAGE_UNAVAILABLE` (Notion: "Ошибки хранилища … должны возвращать 500").
 - Expired (`expires_at < now()`) → 410 `FILE_EXPIRED`.
+
+## Writing
+
+`FilesService.storeWithin(input, change)`: put the object (outside any transaction), then the
+`files` row and the caller's `change` in one transaction; on any failure after the put the object
+is deleted again. `FilesService.remove(fileId)` deletes the row in the caller's transaction and
+enqueues `storage.delete`.
 
 ## Saving transformation results
 
@@ -101,8 +113,8 @@ Notion: "прямая ссылка на файл не раскрывается" 
 
 ## Testing
 
-- Unit and most e2e: `STORAGE_DRIVER=local` with a temp dir per worker; assert the row and the
-  file on disk.
+- Unit: `LocalStorage` on a temp dir. E2e (serial): `STORAGE_DRIVER=local` under
+  `./var/test-storage` (git-ignored); assert the row and the object.
 - One e2e suite against the compose S3 (SeaweedFS) for the S3 adapter: put, get (stream), delete, missing key.
 - Fixture files with real magic bytes (a tiny PNG, a JPEG, an SVG with and without `<script>`, a
   `.png` that is actually text).

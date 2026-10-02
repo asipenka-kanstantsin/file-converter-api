@@ -19,6 +19,21 @@ import type {
   IssuedChallenge,
 } from './challenges.types';
 
+// Started by a signed-in or signing-in user: bound to token_version (A2) and voided by a newer
+// request of the same purpose, so only one code and link is live at a time.
+const SESSION_BOUND: ReadonlySet<ChallengePurpose> = new Set([
+  'email_change',
+  'login',
+]);
+
+// email_change mails the new address; everything else the account's address.
+function recipientOf(challenge: {
+  newEmail: null | string;
+  user: { email: string };
+}): string {
+  return challenge.newEmail ?? challenge.user.email;
+}
+
 // E-mail confirmation by 6-digit code or magic link (decision A4, Notion "Регистрация" 1.3.2):
 // TTL, attempt limit and resend cooldown come from config. Every state change is a conditional
 // statement, so concurrent requests cannot bypass a limit.
@@ -34,23 +49,21 @@ export class ChallengesService {
   async issue(
     purpose: ChallengePurpose,
     user: { email: string; id: string; tokenVersion?: number },
+    newEmail?: string,
   ): Promise<IssuedChallenge> {
     const { code, secrets, token } = this.newSecrets();
-    if (purpose === 'login') {
-      await this.challengesRepository.voidPending(user.id, purpose);
-    }
+    const bound = SESSION_BOUND.has(purpose);
+    if (bound) await this.challengesRepository.voidPending(user.id, purpose);
     const row = await this.challengesRepository.create(
       purpose,
-      {
-        id: user.id,
-        tokenVersion: purpose === 'login' ? user.tokenVersion : undefined,
-      },
+      { id: user.id, tokenVersion: bound ? user.tokenVersion : undefined },
       secrets,
+      newEmail,
     );
     await this.sendMail(
       row.id,
       purpose,
-      user.email,
+      recipientOf({ newEmail: newEmail ?? null, user }),
       code,
       token,
       secrets.sentAt,
@@ -91,7 +104,7 @@ export class ChallengesService {
     await this.sendMail(
       challenge.id,
       challenge.purpose,
-      challenge.user.email,
+      recipientOf(challenge),
       code,
       token,
       secrets.sentAt,
@@ -102,6 +115,16 @@ export class ChallengesService {
       purpose: challenge.purpose,
       userId: challenge.user.id,
     };
+  }
+
+  // The pending challenge without touching its attempts: lets a caller refuse a challenge of the
+  // wrong purpose or owner before a code is compared (no oracle, no attempt spent).
+  async peek(challengeId: string): Promise<Challenge> {
+    return this.findPending(challengeId);
+  }
+
+  async voidPending(userId: string, purpose: ChallengePurpose): Promise<void> {
+    await this.challengesRepository.voidPending(userId, purpose);
   }
 
   // Checks a code without consuming the challenge. The attempt is taken before the comparison

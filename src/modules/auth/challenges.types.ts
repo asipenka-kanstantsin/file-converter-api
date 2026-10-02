@@ -1,4 +1,4 @@
-export type ChallengePurpose = 'login' | 'registration';
+export type ChallengePurpose = 'email_change' | 'login' | 'registration';
 
 export interface Challenge {
   attempts: number;
@@ -7,6 +7,8 @@ export interface Challenge {
   expiresAt: Date;
   id: string;
   lastSentAt: Date;
+  // email_change only: the address being confirmed, where the mail goes.
+  newEmail: null | string;
   purpose: ChallengePurpose;
   tokenVersion: number | null;
   user: { email: string; id: string };

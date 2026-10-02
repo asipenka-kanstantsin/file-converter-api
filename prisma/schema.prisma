@@ -12,6 +12,7 @@ datasource db {
 
 enum UserStatus {
   active
+  blocked
   pending_verification
 
   @@map("user_status")
@@ -22,6 +23,9 @@ model User {
   email        String      @unique(map: "users_email_key") @db.VarChar(254)
   passwordHash String      @map("password_hash")
   displayName  String?     @map("display_name") @db.VarChar(100)
+  photoFileId  String?     @unique(map: "users_photo_file_id_key") @map("photo_file_id") @db.Uuid
+  photo        File?       @relation("UserPhoto", fields: [photoFileId], references: [id], onDelete: SetNull, map: "users_photo_file_id_fkey")
+  files        File[]      @relation("FileOwner")
   status       UserStatus
   tokenVersion Int         @default(0) @map("token_version")
   lastLoginAt  DateTime?   @map("last_login_at") @db.Timestamptz(3)
@@ -89,6 +93,7 @@ model UserRole {
 enum ChallengePurpose {
   registration
   login
+  email_change
 
   @@map("challenge_purpose")
 }
@@ -104,6 +109,8 @@ model Challenge {
   tokenHash    String           @unique(map: "challenges_token_hash_key") @map("token_hash") @db.Char(64)
   // users.token_version when a sign-in challenge was issued; a later bump voids it (A2).
   tokenVersion Int?             @map("token_version")
+  // The address an email_change challenge confirms; the mail goes there.
+  newEmail     String?          @map("new_email") @db.VarChar(254)
   attempts     Int              @default(0)
   expiresAt    DateTime         @map("expires_at") @db.Timestamptz(3)
   lastSentAt   DateTime         @map("last_sent_at") @db.Timestamptz(3)
@@ -148,4 +155,32 @@ model OutboxMessage {
 
   @@index([status, nextAttemptAt], map: "outbox_messages_status_next_attempt_at_idx")
   @@map("outbox_messages")
+}
+
+enum FilePurpose {
+  avatar
+  transformation_result
+
+  @@map("file_purpose")
+}
+
+// Source of truth for stored objects (12-storage): an object without a row does not exist for
+// the app. Business rows reference files.id, never a key or a URL.
+model File {
+  id           String      @id @default(uuid(7)) @db.Uuid
+  ownerId      String      @map("owner_id") @db.Uuid
+  owner        User        @relation("FileOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  purpose      FilePurpose
+  key          String      @unique(map: "files_key_key") @db.VarChar(200)
+  originalName String?     @map("original_name") @db.VarChar(255)
+  mime         String      @db.VarChar(100)
+  size         Int
+  checksum     String      @db.Char(64)
+  expiresAt    DateTime?   @map("expires_at") @db.Timestamptz(3)
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  photoOf      User?       @relation("UserPhoto")
+
+  @@index([ownerId], map: "files_owner_id_idx")
+  @@index([expiresAt], map: "files_expires_at_idx")
+  @@map("files")
 }

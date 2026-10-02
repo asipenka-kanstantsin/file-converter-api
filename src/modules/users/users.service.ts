@@ -1,18 +1,23 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 
 import { AppException, ErrorCode } from '@/common/errors';
+import { AppConfig } from '@/config';
 
 import { UsersRepository } from './users.repository';
 import type {
   NewUser,
   SessionUser,
   User,
+  UserChanges,
   UserCredentials,
 } from './users.types';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly usersRepository: UsersRepository) {}
+  constructor(
+    private readonly config: AppConfig,
+    private readonly usersRepository: UsersRepository,
+  ) {}
 
   // Returns the user active, whether this call or an earlier one activated it.
   async activate(id: string): Promise<User> {
@@ -39,6 +44,39 @@ export class UsersService {
       );
     }
     return user;
+  }
+
+  // A taken e-mail is refused here and, for a race, by the unique index (→ USER_EMAIL_TAKEN).
+  async update(id: string, changes: UserChanges): Promise<User> {
+    if (changes.email !== undefined) {
+      const current = await this.usersRepository.findById(id);
+      if (
+        current?.email !== changes.email &&
+        !(await this.isEmailAvailable(changes.email))
+      ) {
+        throw new AppException(ErrorCode.USER_EMAIL_TAKEN, HttpStatus.CONFLICT);
+      }
+    }
+    return this.usersRepository.update(id, changes);
+  }
+
+  // An abandoned registration (A13) does not hold an address against an e-mail change either:
+  // it is released first, as a new registration would.
+  async isEmailAvailable(email: string): Promise<boolean> {
+    const ttlMs = this.config.confirmation.ttlSeconds * 1000;
+    await this.usersRepository.deleteStalePending(
+      email,
+      new Date(Date.now() - ttlMs),
+    );
+    return !(await this.usersRepository.existsByEmail(email));
+  }
+
+  lockForUpdate(id: string): Promise<User | null> {
+    return this.usersRepository.lockForUpdate(id);
+  }
+
+  setPhoto(id: string, fileId: null | string): Promise<void> {
+    return this.usersRepository.setPhoto(id, fileId);
   }
 
   findById(id: string): Promise<User | null> {

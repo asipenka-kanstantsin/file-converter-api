@@ -46,11 +46,19 @@ export const envSchema = z
     MAIL_FROM: z.string().min(3).max(200),
     NODE_ENV: z.enum(['development', 'production', 'test']),
     OUTBOX_POLL_INTERVAL_MS: positiveInt.default(1000),
+    S3_ACCESS_KEY_ID: optionalSecret,
+    S3_BUCKET: z.string().min(1).optional(),
+    S3_ENDPOINT: z.url().optional(),
+    S3_FORCE_PATH_STYLE: booleanString.default(false),
+    S3_REGION: z.string().min(1).default('us-east-1'),
+    S3_SECRET_ACCESS_KEY: optionalSecret,
     SMTP_HOST: z.string().min(1),
     SMTP_PASS: optionalSecret,
     SMTP_PORT: z.coerce.number().int().min(1).max(65_535),
     SMTP_SECURE: booleanString.default(false),
     SMTP_USER: optionalSecret,
+    STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+    STORAGE_LOCAL_DIR: z.string().min(1).default('./var/storage'),
     THROTTLE_CONFIRM_LIMIT: positiveInt.default(10),
     THROTTLE_LIMIT: positiveInt.default(100),
     THROTTLE_LOGIN_BLOCK_SECONDS: positiveInt.default(900),
@@ -58,8 +66,21 @@ export const envSchema = z
     THROTTLE_MAIL_LIMIT: positiveInt.default(3),
     THROTTLE_PROFILE_LIMIT: positiveInt.default(60),
     THROTTLE_TTL_SECONDS: positiveInt.default(60),
+    THROTTLE_UPLOAD_LIMIT: positiveInt.default(10),
   })
   .superRefine((env, ctx) => {
+    // The S3 driver cannot start without its bucket and credentials (12-storage).
+    if (env.STORAGE_DRIVER === 's3') {
+      for (const key of [
+        'S3_BUCKET',
+        'S3_ACCESS_KEY_ID',
+        'S3_SECRET_ACCESS_KEY',
+      ] as const) {
+        if (!env[key]) {
+          ctx.addIssue({ code: 'custom', message: 's3_requires', path: [key] });
+        }
+      }
+    }
     if (env.NODE_ENV !== 'production') return;
     // Notion NFR: CORS only for trusted domains — in production no plain http, no local origins.
     for (const origin of env.APP_CORS_ORIGINS) {

@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-export const USER_STATUSES = ['active', 'pending_verification'] as const;
+export const USER_STATUSES = [
+  'active',
+  'blocked',
+  'pending_verification',
+] as const;
 export const userStatusSchema = z.enum(USER_STATUSES);
 export type UserStatus = z.infer<typeof userStatusSchema>;
 
@@ -10,8 +14,17 @@ export interface User {
   email: string;
   id: string;
   lastLoginAt: Date | null;
+  photoFileId: null | string;
   status: UserStatus;
   tokenVersion: number;
+}
+
+// What an edit may change (Notion "Изменение данных пользователя"); which of these a caller may
+// send is decided by the accounts module.
+export interface UserChanges {
+  displayName?: null | string;
+  email?: string;
+  status?: Extract<UserStatus, 'active' | 'blocked'>;
 }
 
 export interface SessionUser extends User {

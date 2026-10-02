@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 
 import { ErrorCode } from '@/common/errors';
 import type { AppConfig } from '@/config';
+import type { MailService } from '@/infrastructure/mail';
 import type { SettingsService } from '@/modules/settings';
 import type { User, UsersService } from '@/modules/users';
 
@@ -25,6 +26,7 @@ const user: User = {
   email: 'jane@example.com',
   id: 'u1',
   lastLoginAt: null,
+  photoFileId: null,
   status: 'active',
   tokenVersion: 2,
 };
@@ -42,6 +44,7 @@ function challenge(overrides: Partial<Challenge>): Challenge {
     expiresAt: new Date(Date.now() + 60_000),
     id: 'c1',
     lastSentAt: new Date(),
+    newEmail: null,
     purpose: 'login',
     tokenVersion: 2,
     user: { email: user.email, id: user.id },
@@ -57,10 +60,16 @@ function setup(options: {
   verified?: Challenge;
   verify?: () => Promise<boolean>;
 }): {
+  challenges: Record<string, jest.Mock>;
   lockout: LoginLockout;
   service: AuthService;
   users: Record<
-    'activate' | 'findCredentialsByEmail' | 'getActive' | 'recordLogin',
+    | 'activate'
+    | 'findCredentialsByEmail'
+    | 'getActive'
+    | 'lockForUpdate'
+    | 'recordLogin'
+    | 'update',
     jest.Mock
   >;
 } {
@@ -70,13 +79,16 @@ function setup(options: {
       .fn()
       .mockResolvedValue(options.credentials ?? null),
     getActive: jest.fn().mockResolvedValue(user),
+    lockForUpdate: jest.fn().mockResolvedValue(user),
     recordLogin: jest.fn().mockResolvedValue(undefined),
+    update: jest.fn().mockResolvedValue(user),
   };
   const challenges = {
     consume: jest.fn().mockResolvedValue(undefined),
     issue: jest
       .fn()
       .mockResolvedValue({ challengeId: 'c1', expiresAt: new Date() }),
+    peek: jest.fn().mockResolvedValue(options.verified),
     verifyCode: jest.fn().mockResolvedValue(options.verified),
     verifyToken: jest.fn().mockResolvedValue(options.verified),
   };
@@ -85,6 +97,9 @@ function setup(options: {
     challenges as unknown as ChallengesService,
     config,
     lockout,
+    {
+      enqueue: jest.fn().mockResolvedValue(undefined),
+    } as unknown as MailService,
     {
       verify:
         options.verify ??
@@ -100,7 +115,7 @@ function setup(options: {
     } as unknown as SettingsService,
     users as unknown as UsersService,
   );
-  return { lockout, service, users };
+  return { challenges, lockout, service, users };
 }
 
 const input = { email: user.email, password: 'secret-pass-1' };
@@ -212,6 +227,48 @@ describe('AuthService', () => {
         code: ErrorCode.RATE_LIMITED,
       });
       expect(users.findCredentialsByEmail).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('e-mail change confirmation', () => {
+    const change = (tokenVersion: number): Challenge =>
+      challenge({
+        newEmail: 'new@example.com',
+        purpose: 'email_change',
+        tokenVersion,
+      });
+
+    it('is void after any token_version bump since it started (A2)', async () => {
+      const { service, users } = setup({ verified: change(1) });
+
+      await expect(
+        service.confirmEmailChange(user.id, { token: 't'.repeat(43) }),
+      ).rejects.toMatchObject({ code: ErrorCode.AUTH_CHALLENGE_INVALID });
+      expect(users.update).not.toHaveBeenCalled();
+    });
+
+    it('changes the e-mail under a row lock when the version still matches', async () => {
+      const { service, users } = setup({ verified: change(2) });
+
+      await service.confirmEmailChange(user.id, { token: 't'.repeat(43) });
+
+      expect(users.lockForUpdate).toHaveBeenCalledWith(user.id);
+      expect(users.update).toHaveBeenCalledWith(user.id, {
+        email: 'new@example.com',
+      });
+    });
+
+    it("refuses another user's challenge before comparing the code", async () => {
+      const { challenges, service } = setup({ verified: change(2) });
+
+      await expect(
+        service.confirmEmailChange('someone-else', {
+          challengeId: 'c1',
+          code: '123456',
+        }),
+      ).rejects.toMatchObject({ code: ErrorCode.AUTH_CHALLENGE_INVALID });
+      expect(challenges.peek).toHaveBeenCalledWith('c1');
+      expect(challenges.verifyCode).not.toHaveBeenCalled();
     });
   });
 

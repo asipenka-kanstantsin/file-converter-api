@@ -41,13 +41,16 @@ import { RegisterDto } from './dto/register.dto';
 import { ResendConfirmationDto } from './dto/resend-confirmation.dto';
 import { userOrConfirmationSchema } from './dto/user-or-confirmation.dto';
 import {
+  ACCESS_COOKIE,
   LOGIN_BINDING_COOKIE,
   REFRESH_COOKIE,
   SessionCookies,
 } from './session-cookies';
+import { SessionResolver } from './session-resolver';
 
 const bindingCookieSchema = z.object({ [LOGIN_BINDING_COOKIE]: z.string() });
 const refreshCookieSchema = z.object({ [REFRESH_COOKIE]: z.string().min(1) });
+const accessCookieSchema = z.object({ [ACCESS_COOKIE]: z.string().min(1) });
 
 function boundChallengeId(request: Request): string | undefined {
   const parsed = bindingCookieSchema.safeParse(request.cookies);
@@ -72,6 +75,7 @@ export class AuthController {
     private readonly authService: AuthService,
     private readonly config: AppConfig,
     private readonly sessionCookies: SessionCookies,
+    private readonly sessions: SessionResolver,
   ) {}
 
   @Get('confirm')
@@ -84,7 +88,11 @@ export class AuthController {
     @Res({ passthrough: true }) response: Response,
   ): Promise<{ user: UserResponse }> {
     return this.confirmed(
-      await this.authService.confirmWithToken(token, boundChallengeId(request)),
+      await this.authService.confirmWithToken(
+        token,
+        boundChallengeId(request),
+        await this.sessionUserId(request),
+      ),
       response,
     );
   }
@@ -207,6 +215,17 @@ export class AuthController {
       this.sessionCookies.bindLogin(response, challengeId);
     }
     return confirmationRequired(issued);
+  }
+
+  // The account signed in in this browser, if any (the route itself is public).
+  private async sessionUserId(request: Request): Promise<string | undefined> {
+    const cookies = accessCookieSchema.safeParse(request.cookies);
+    if (!cookies.success) return undefined;
+    const session = await this.sessions.resolve(
+      'access',
+      cookies.data[ACCESS_COOKIE],
+    );
+    return session.ok ? session.user.id : undefined;
   }
 
   private confirmed(

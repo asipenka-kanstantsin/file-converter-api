@@ -269,8 +269,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '403':
-          description: CSRF check failed, or the account's registration is not confirmed yet.
-          x-error-codes: [AUTH_ACCOUNT_NOT_VERIFIED, CSRF_INVALID]
+          description: >-
+            CSRF check failed, the account's registration is not confirmed yet, or the account is
+            blocked.
+          x-error-codes: [AUTH_ACCOUNT_BLOCKED, AUTH_ACCOUNT_NOT_VERIFIED, CSRF_INVALID]
           headers:
             X-Request-Id:
               $ref: '#/components/headers/RequestId'
@@ -314,6 +316,10 @@ paths:
       operationId: auth_confirmWithLink
       tags: [auth]
       summary: Confirm a pending action with the e-mailed magic link
+      description: |
+        Completes a registration, a sign-in (in the browser that started it) or an e-mail change
+        (only where the account's owner is signed in: the `access_token` cookie is read). Only a
+        sign-in sets session cookies.
       parameters:
         - name: login_challenge
           in: cookie
@@ -333,9 +339,19 @@ paths:
           $ref: '#/components/responses/ConfirmationFailed'
         '403':
           description: >-
-            A sign-in link opened in a different browser than the one that started the sign-in
-            (no matching `login_challenge` cookie). Use that browser, or the code.
-          x-error-codes: [AUTH_CHALLENGE_OTHER_BROWSER]
+            A sign-in link opened in another browser than the one that started it, or an account
+            change (e-mail) opened where its owner is not signed in.
+          x-error-codes: [AUTH_CHALLENGE_OTHER_BROWSER, AUTH_CHALLENGE_SESSION_REQUIRED]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: The new e-mail of an e-mail change was registered meanwhile.
+          x-error-codes: [USER_EMAIL_TAKEN]
           headers:
             X-Request-Id:
               $ref: '#/components/headers/RequestId'
@@ -536,6 +552,329 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UserNotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    patch:
+      operationId: users_updateProfile
+      tags: [users]
+      summary: Change a user's profile
+      description: |
+        Self may change `displayName` only; the e-mail goes through `POST …/email-change`. With
+        `users@update` any field may change, the e-mail directly. A field the caller may not
+        change answers 403 with `context.fields`. `status: blocked` ends the account's sessions
+        and is refused for the last active admin.
+      x-permission: users@update (not needed to change one's own displayName)
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfilePatch'
+      responses:
+        '200':
+          description: The updated profile.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '404':
+          $ref: '#/components/responses/UserNotFound'
+        '409':
+          description: The e-mail is taken, or the last active admin would be blocked.
+          x-error-codes: [RBAC_LAST_ADMIN, USER_EMAIL_TAKEN]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/users/{userId}/email-change:
+    post:
+      operationId: users_startEmailChange
+      tags: [users]
+      summary: Ask to change one's e-mail
+      description: |
+        Self only (an admin changes it with `PATCH`). A code and a link go to the new address;
+        the e-mail changes only once confirmed. A newer request voids the previous one.
+      x-permission: none — Self only
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailChangeRequest'
+      responses:
+        '200':
+          description: Confirmation e-mailed to the new address.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmationRequired'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '409':
+          description: The new e-mail is already registered.
+          x-error-codes: [USER_EMAIL_TAKEN]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/users/{userId}/email-change/confirm:
+    post:
+      operationId: users_confirmEmailChange
+      tags: [users]
+      summary: Confirm one's e-mail change
+      description: |
+        With `{ challengeId, code }` or the link's `{ token }`. The e-mailed link itself points at
+        `GET /api/auth/confirm?token=`, which completes the change as well.
+      x-permission: none — Self only
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailChangeConfirmRequest'
+      responses:
+        '200':
+          description: E-mail changed; the updated profile.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileEnvelope'
+        '400':
+          $ref: '#/components/responses/ConfirmationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '409':
+          description: The new e-mail was registered meanwhile.
+          x-error-codes: [USER_EMAIL_TAKEN]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '423':
+          $ref: '#/components/responses/ChallengeLocked'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/users/{userId}/photo:
+    get:
+      operationId: users_getPhoto
+      tags: [users]
+      summary: A user's profile photo
+      description: >-
+        Streamed after the access check (`Content-Disposition: inline`); there is no direct
+        storage URL. A storage failure before the first byte answers 500; after it, the
+        connection is closed.
+      x-permission: users@read (not needed for one's own photo)
+      security:
+        - accessCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: The photo.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Cache-Control:
+              schema:
+                type: string
+                const: private, no-store
+          content:
+            image/png:
+              schema:
+                type: string
+                contentMediaType: image/png
+            image/jpeg:
+              schema:
+                type: string
+                contentMediaType: image/jpeg
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No such user, or no photo.
+          x-error-codes: [PHOTO_NOT_FOUND, USER_NOT_FOUND]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: File storage is unavailable.
+          x-error-codes: [STORAGE_UNAVAILABLE]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    put:
+      operationId: users_replacePhoto
+      tags: [users]
+      summary: Upload a profile photo
+      description: |
+        Multipart field `file`: PNG or JPEG (detected from the content), at most 5 MB. It is
+        re-encoded (metadata removed) and scaled to fit 1024×1024; it replaces any earlier photo.
+      x-permission: users@update (not needed for one's own photo)
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  contentMediaType: application/octet-stream
+      responses:
+        '200':
+          description: The profile with the new photo.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileEnvelope'
+        '400':
+          description: No file, a malformed multipart body, or an invalid id.
+          x-error-codes: [MALFORMED_REQUEST, VALIDATION_FAILED]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOrValidationEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '404':
+          $ref: '#/components/responses/UserNotFound'
+        '413':
+          $ref: '#/components/responses/FileTooLarge'
+        '415':
+          $ref: '#/components/responses/FileTypeNotSupported'
+        '500':
+          description: File storage is unavailable.
+          x-error-codes: [STORAGE_UNAVAILABLE]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    delete:
+      operationId: users_removePhoto
+      tags: [users]
+      summary: Remove a profile photo
+      description: Idempotent.
+      x-permission: users@update (not needed for one's own photo)
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '204':
+          description: No photo any more.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
         '404':
           $ref: '#/components/responses/UserNotFound'
         '429':
@@ -1237,11 +1576,13 @@ components:
       type: string
       description: Stable machine-readable error code. Clients branch on it, never on `detail`.
       enum:
+        - AUTH_ACCOUNT_BLOCKED
         - AUTH_ACCOUNT_NOT_VERIFIED
         - AUTH_CHALLENGE_EXPIRED
         - AUTH_CHALLENGE_INVALID
         - AUTH_CHALLENGE_LOCKED
         - AUTH_CHALLENGE_OTHER_BROWSER
+        - AUTH_CHALLENGE_SESSION_REQUIRED
         - AUTH_CODE_INVALID
         - AUTH_FORBIDDEN
         - AUTH_INVALID_CREDENTIALS
@@ -1249,9 +1590,12 @@ components:
         - AUTH_UNAUTHENTICATED
         - CONFLICT
         - CSRF_INVALID
+        - FILE_TOO_LARGE
+        - FILE_TYPE_NOT_SUPPORTED
         - INTERNAL_ERROR
         - MALFORMED_REQUEST
         - PAYLOAD_TOO_LARGE
+        - PHOTO_NOT_FOUND
         - RATE_LIMITED
         - RBAC_ACTION_IN_USE
         - RBAC_ACTION_NOT_ALLOWED
@@ -1267,6 +1611,7 @@ components:
         - REQUEST_REJECTED
         - ROUTE_NOT_FOUND
         - SERVICE_UNAVAILABLE
+        - STORAGE_UNAVAILABLE
         - UNSUPPORTED_MEDIA_TYPE
         - USER_EMAIL_TAKEN
         - USER_NOT_ACTIVE
@@ -1415,7 +1760,7 @@ components:
           format: email
         status:
           type: string
-          enum: [active, pending_verification]
+          enum: [active, blocked, pending_verification]
         createdAt:
           type: string
           format: date-time
@@ -1672,7 +2017,7 @@ components:
               type: [string, 'null']
             status:
               type: string
-              enum: [active, pending_verification]
+              enum: [active, blocked, pending_verification]
             createdAt:
               type: string
               format: date-time
@@ -1686,6 +2031,56 @@ components:
       properties:
         profile:
           $ref: '#/components/schemas/Profile'
+
+    ProfilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        displayName:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 100
+        email:
+          $ref: '#/components/schemas/Email'
+        status:
+          type: string
+          enum: [active, blocked]
+    EmailChangeRequest:
+      type: object
+      required: [newEmail]
+      properties:
+        newEmail:
+          $ref: '#/components/schemas/Email'
+    EmailChangeConfirmRequest:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [challengeId, code]
+          properties:
+            challengeId:
+              $ref: '#/components/schemas/ChallengeId'
+            code:
+              type: string
+              pattern: '^\d{6}$'
+        - type: object
+          additionalProperties: false
+          required: [token]
+          properties:
+            token:
+              $ref: '#/components/schemas/MagicLinkToken'
+    FileTooLargeEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ErrorEnvelope'
+        - type: object
+          required: [context]
+          properties:
+            context:
+              type: object
+              required: [maxBytes]
+              properties:
+                maxBytes:
+                  type: integer
 
     ErrorOrValidationEnvelope:
       anyOf:
@@ -1937,6 +2332,26 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
+    FileTooLarge:
+      description: The file is larger than allowed (`context.maxBytes`).
+      x-error-codes: [FILE_TOO_LARGE]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/FileTooLargeEnvelope'
+    FileTypeNotSupported:
+      description: The content is not one of the allowed types.
+      x-error-codes: [FILE_TYPE_NOT_SUPPORTED]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
     CsrfInvalid:
       description: The `X-CSRF-Token` header is missing or does not match the `csrf_token` cookie.
       x-error-codes: [CSRF_INVALID]
@@ -2038,6 +2453,7 @@ components:
         - MALFORMED_REQUEST
         - PAYLOAD_TOO_LARGE
         - REQUEST_REJECTED
+        - STORAGE_UNAVAILABLE
         - UNSUPPORTED_MEDIA_TYPE
       headers:
         X-Request-Id:

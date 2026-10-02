@@ -5,7 +5,7 @@ import type { AppConfig } from '@/config';
 
 // Stricter named limits on top of the global one (09-auth → Rate limits). A route opts in with
 // @RateLimit('mail'); every other route skips these throttlers.
-export type RateLimitGroup = 'confirm' | 'mail' | 'profile';
+export type RateLimitGroup = 'confirm' | 'mail' | 'profile' | 'upload';
 
 export const RATE_LIMIT_KEY = 'rateLimitGroup';
 
@@ -29,5 +29,6 @@ export function buildThrottlers(config: AppConfig): ThrottlerOptions[] {
     group('mail', config.throttle.mailLimit),
     group('confirm', config.throttle.confirmLimit),
     group('profile', config.throttle.profileLimit),
+    group('upload', config.throttle.uploadLimit),
   ];
 }

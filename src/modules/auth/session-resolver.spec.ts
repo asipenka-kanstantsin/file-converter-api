@@ -9,6 +9,7 @@ const user: SessionUser = {
   email: 'jane@example.com',
   id: 'u1',
   lastLoginAt: null,
+  photoFileId: null,
   roleIds: ['r1'],
   status: 'active',
   tokenVersion: 2,

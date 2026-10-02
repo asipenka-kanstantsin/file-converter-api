@@ -47,6 +47,7 @@ describe('parseAppConfig', () => {
       mailLimit: 3,
       profileLimit: 60,
       ttlSeconds: 60,
+      uploadLimit: 10,
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.app.corsOrigins)).toBe(true);

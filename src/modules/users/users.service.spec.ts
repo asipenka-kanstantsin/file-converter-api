@@ -1,4 +1,5 @@
 import { AppException, ErrorCode } from '@/common/errors';
+import type { AppConfig } from '@/config';
 
 import type { UsersRepository } from './users.repository';
 import { UsersService } from './users.service';
@@ -10,12 +11,16 @@ const user: User = {
   email: 'jane@example.com',
   id: 'u1',
   lastLoginAt: null,
+  photoFileId: null,
   status: 'active',
   tokenVersion: 0,
 };
 
 function service(repository: Partial<UsersRepository>): UsersService {
-  return new UsersService(repository as UsersRepository);
+  return new UsersService(
+    { confirmation: { ttlSeconds: 600 } } as AppConfig,
+    repository as UsersRepository,
+  );
 }
 
 describe('UsersService', () => {

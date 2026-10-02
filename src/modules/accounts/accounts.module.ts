@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 
+import { AuthModule } from '@/modules/auth';
+import { FilesModule } from '@/modules/files';
 import { RbacModule } from '@/modules/rbac';
 import { UsersModule } from '@/modules/users';
 
@@ -10,7 +12,7 @@ import { AccountsService } from './accounts.service';
 // the RBAC modules; kept apart so neither of those depends on the other.
 @Module({
   controllers: [AccountsController],
-  imports: [RbacModule, UsersModule],
+  imports: [AuthModule, FilesModule, RbacModule, UsersModule],
   providers: [AccountsService],
 })
 export class AccountsModule {}

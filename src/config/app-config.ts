@@ -24,6 +24,18 @@ export class AppConfig {
   readonly db!: { url: string };
   readonly jobs!: { enabled: boolean; outboxPollIntervalMs: number };
   readonly log!: { level: Env['LOG_LEVEL']; pretty: boolean };
+  readonly storage!: {
+    driver: Env['STORAGE_DRIVER'];
+    localDir: string;
+    s3: {
+      accessKeyId?: string;
+      bucket?: string;
+      endpoint?: string;
+      forcePathStyle: boolean;
+      region: string;
+      secretAccessKey?: string;
+    };
+  };
   readonly mail!: {
     from: string;
     smtp: {
@@ -42,6 +54,7 @@ export class AppConfig {
     mailLimit: number;
     profileLimit: number;
     ttlSeconds: number;
+    uploadLimit: number;
   };
 }
 
@@ -83,6 +96,18 @@ export function buildAppConfig(env: Env): AppConfig {
         user: env.SMTP_USER,
       }),
     }),
+    storage: Object.freeze({
+      driver: env.STORAGE_DRIVER,
+      localDir: env.STORAGE_LOCAL_DIR,
+      s3: Object.freeze({
+        accessKeyId: env.S3_ACCESS_KEY_ID,
+        bucket: env.S3_BUCKET,
+        endpoint: env.S3_ENDPOINT,
+        forcePathStyle: env.S3_FORCE_PATH_STYLE,
+        region: env.S3_REGION,
+        secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+      }),
+    }),
     throttle: Object.freeze({
       confirmLimit: env.THROTTLE_CONFIRM_LIMIT,
       limit: env.THROTTLE_LIMIT,
@@ -91,6 +116,7 @@ export function buildAppConfig(env: Env): AppConfig {
       mailLimit: env.THROTTLE_MAIL_LIMIT,
       profileLimit: env.THROTTLE_PROFILE_LIMIT,
       ttlSeconds: env.THROTTLE_TTL_SECONDS,
+      uploadLimit: env.THROTTLE_UPLOAD_LIMIT,
     }),
   });
 }

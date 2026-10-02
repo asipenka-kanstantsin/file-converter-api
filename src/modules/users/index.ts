@@ -7,6 +7,7 @@ export { userStatusSchema } from './users.types';
 export type {
   SessionUser,
   User,
+  UserChanges,
   UserCredentials,
   UserStatus,
 } from './users.types';

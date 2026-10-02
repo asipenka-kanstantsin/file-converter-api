@@ -194,10 +194,12 @@ export class RbacAdminService {
   private async grantAdminInTx(email: string): Promise<string> {
     const credentials = await this.users.findCredentialsByEmail(email);
     if (!credentials) notFound(ErrorCode.USER_NOT_FOUND);
+    // Lock order as everywhere: admin role, then the user (P8).
+    const admin = await this.requireAdminRole();
+    await this.repository.lockRole(admin.id);
     const user = await this.users.lockForShare(credentials.user.id);
     if (!user) notFound(ErrorCode.USER_NOT_FOUND);
     if (user.status !== 'active') conflict(ErrorCode.USER_NOT_ACTIVE);
-    const admin = await this.requireAdminRole();
     await this.repository.addUserRole(user.id, admin.id);
     return user.id;
   }
@@ -341,6 +343,25 @@ export class RbacAdminService {
       conflict(ErrorCode.RBAC_LAST_ADMIN);
     }
     return this.repository.roleIdsOf(userId);
+  }
+
+  // In the caller's transaction, before an account stops being an active admin (blocked, deleted)
+  // and before the caller locks that user: admin role first, as in setUserRoles, so the lock
+  // order is the same everywhere (R6).
+  // The first lock of any change to who is an active admin (P8 lock order).
+  async lockAdminRole(): Promise<void> {
+    const admin = await this.requireAdminRole();
+    await this.repository.lockRole(admin.id);
+  }
+
+  async assertAnotherActiveAdmin(userId: string): Promise<void> {
+    const admin = await this.requireAdminRole();
+    await this.repository.lockRole(admin.id);
+    if (!(await this.repository.roleIdsOf(userId)).includes(admin.id)) return;
+    const holders = await this.repository.countActiveRoleHolders(admin.id);
+    const self =
+      (await this.users.findById(userId))?.status === 'active' ? 1 : 0;
+    if (holders - self <= 0) conflict(ErrorCode.RBAC_LAST_ADMIN);
   }
 
   private async requireAdminRole(): Promise<Role> {

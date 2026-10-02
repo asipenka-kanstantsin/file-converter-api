@@ -22,6 +22,7 @@ function challenge(overrides: Partial<Challenge> = {}): Challenge {
     expiresAt: new Date(Date.now() + 60_000),
     id: 'c1',
     lastSentAt: new Date(Date.now() - 120_000),
+    newEmail: null,
     purpose: 'registration',
     tokenVersion: null,
     user: { email: 'jane@example.com', id: 'u1' },

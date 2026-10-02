@@ -20,6 +20,7 @@ import {
 } from '@/infrastructure/database';
 import { MailModule } from '@/infrastructure/mail';
 import { OutboxModule } from '@/infrastructure/outbox';
+import { mapStorageException, StorageModule } from '@/infrastructure/storage';
 import { AccountsModule } from '@/modules/accounts';
 import { AuthModule, JwtAuthGuard } from '@/modules/auth';
 import { HealthModule } from '@/modules/health';
@@ -54,6 +55,7 @@ import { SettingsModule } from '@/modules/settings';
     OutboxModule,
     RbacModule,
     SettingsModule,
+    StorageModule,
     ThrottlerModule.forRootAsync({
       inject: [AppConfig],
       useFactory: (config: AppConfig) => ({
@@ -64,7 +66,10 @@ import { SettingsModule } from '@/modules/settings';
   providers: [
     { provide: APP_PIPE, useClass: ZodValidationPipe },
     { provide: APP_INTERCEPTOR, useClass: ZodSerializerInterceptor },
-    { provide: EXCEPTION_MAPPERS, useValue: [mapPrismaException] },
+    {
+      provide: EXCEPTION_MAPPERS,
+      useValue: [mapPrismaException, mapStorageException],
+    },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     // Order matters: throttling, CSRF, the access token, then the permission (03-nestjs).
     { provide: APP_GUARD, useClass: ThrottlerGuard },

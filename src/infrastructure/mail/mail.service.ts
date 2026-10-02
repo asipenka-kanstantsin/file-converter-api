@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { z } from 'zod';
+import { z, type ZodType } from 'zod';
 
 import { AppConfig } from '@/config';
 import { OutboxService, PermanentJobError } from '@/infrastructure/outbox';
@@ -8,6 +8,7 @@ import {
   MAIL_TEMPLATES,
   type MailTemplate,
   type MailVars,
+  type RenderedMail,
 } from './mail-templates';
 import { MAIL_TRANSPORT, type MailTransport } from './mail-transport';
 
@@ -55,11 +56,16 @@ export class MailService {
     const parsed = mailPayloadSchema.safeParse(payload);
     if (!parsed.success) throw new PermanentJobError('invalid mail payload');
     const { template, to } = parsed.data;
-    const vars = MAIL_TEMPLATES[template].vars.safeParse(parsed.data.vars);
+    // Each template's render takes exactly what its own vars schema produced.
+    const definition = MAIL_TEMPLATES[template] as unknown as {
+      render(vars: unknown): RenderedMail;
+      vars: ZodType;
+    };
+    const vars = definition.vars.safeParse(parsed.data.vars);
     if (!vars.success)
       throw new PermanentJobError(`invalid vars for ${template}`);
 
-    const rendered = MAIL_TEMPLATES[template].render(vars.data);
+    const rendered = definition.render(vars.data);
     const { messageId } = await this.transport.send({
       ...rendered,
       from: this.config.mail.from,

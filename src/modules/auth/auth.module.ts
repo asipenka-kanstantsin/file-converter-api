@@ -19,7 +19,7 @@ import { SessionTokenService } from './session-tokens';
 @Module({
   controllers: [AuthController],
   // AppModule registers the guard globally, after throttling and CSRF (03-nestjs).
-  exports: [JwtAuthGuard],
+  exports: [AuthService, JwtAuthGuard],
   // Secrets are passed per token (access vs refresh), so the module needs no default secret.
   imports: [JwtModule.register({}), MailModule, SettingsModule, UsersModule],
   providers: [

@@ -18,6 +18,7 @@ const challengeSelect = {
   expiresAt: true,
   id: true,
   lastSentAt: true,
+  newEmail: true,
   purpose: true,
   tokenVersion: true,
   user: { select: { email: true, id: true } },
@@ -48,12 +49,14 @@ export class ChallengesRepository {
     purpose: ChallengePurpose,
     user: { id: string; tokenVersion?: number },
     secrets: ChallengeSecrets,
+    newEmail?: string,
   ): Promise<{ expiresAt: Date; id: string }> {
     return this.txHost.tx.challenge.create({
       data: {
         codeHash: secrets.codeHash,
         expiresAt: secrets.expiresAt,
         lastSentAt: secrets.sentAt,
+        newEmail: newEmail ?? null,
         purpose,
         tokenHash: secrets.tokenHash,
         tokenVersion: user.tokenVersion ?? null,

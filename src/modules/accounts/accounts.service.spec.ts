@@ -1,7 +1,9 @@
 import { Logger } from '@nestjs/common';
 
 import { ErrorCode } from '@/common/errors';
-import type { RbacService } from '@/modules/rbac';
+import type { AuthService } from '@/modules/auth';
+import type { FilesService } from '@/modules/files';
+import type { RbacAdminService, RbacService } from '@/modules/rbac';
 import type { User, UsersService } from '@/modules/users';
 
 import { AccountsService } from './accounts.service';
@@ -12,6 +14,7 @@ const user: User = {
   email: 'jane@example.com',
   id: 'u2',
   lastLoginAt: new Date('2026-02-01T00:00:00Z'),
+  photoFileId: null,
   status: 'active',
   tokenVersion: 4,
 };
@@ -26,7 +29,10 @@ function setup(
     can,
     findById,
     service: new AccountsService(
+      {} as AuthService,
+      {} as FilesService,
       { can } as unknown as RbacService,
+      {} as RbacAdminService,
       { findById } as unknown as UsersService,
     ),
   };

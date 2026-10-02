@@ -7,6 +7,7 @@ import type { AppConfig } from '@/config';
 import { AuthController } from './auth.controller';
 import type { AuthService } from './auth.service';
 import type { SessionCookies } from './session-cookies';
+import type { SessionResolver } from './session-resolver';
 
 function setup(refresh: jest.Mock): {
   clear: jest.Mock;
@@ -18,6 +19,7 @@ function setup(refresh: jest.Mock): {
     { refresh } as unknown as AuthService,
     {} as AppConfig,
     { clear, set: jest.fn() } as unknown as SessionCookies,
+    {} as SessionResolver,
   );
   const response = { setHeader: jest.fn() } as unknown as Response;
   return { clear, controller, response };

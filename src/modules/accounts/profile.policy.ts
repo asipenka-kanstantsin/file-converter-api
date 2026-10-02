@@ -26,7 +26,7 @@ export function toProfile(user: User, audience: ProfileAudience): Profile {
     email: user.email,
     fields,
     id: user.id,
-    // Deferred to FC-6 (P1): then the API path `/api/users/{id}/photo`, never a storage URL (F4).
-    photo: null,
+    // The API path, never a storage URL (F4).
+    photo: user.photoFileId ? `/api/users/${user.id}/photo` : null,
   };
 }

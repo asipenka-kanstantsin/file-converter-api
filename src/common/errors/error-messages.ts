@@ -3,6 +3,7 @@ import { ErrorCode } from './error-code';
 // Single supported locale (decision H4). Every ErrorCode has exactly one message; the
 // error-messages spec fails when a code is missing.
 export const ERROR_MESSAGES = {
+  [ErrorCode.AUTH_ACCOUNT_BLOCKED]: 'This account is blocked. Contact support.',
   [ErrorCode.AUTH_ACCOUNT_NOT_VERIFIED]:
     'Confirm your registration from the e-mail before signing in.',
   [ErrorCode.AUTH_CHALLENGE_EXPIRED]:
@@ -13,6 +14,8 @@ export const ERROR_MESSAGES = {
     'Too many wrong codes. Request a new code.',
   [ErrorCode.AUTH_CHALLENGE_OTHER_BROWSER]:
     'Open the sign-in link in the browser where you started signing in, or enter the code.',
+  [ErrorCode.AUTH_CHALLENGE_SESSION_REQUIRED]:
+    'Open this link in a browser where you are signed in to this account, or enter the code.',
   [ErrorCode.AUTH_CODE_INVALID]: 'The code is incorrect.',
   [ErrorCode.AUTH_FORBIDDEN]: "You don't have permission to do this.",
   [ErrorCode.AUTH_INVALID_CREDENTIALS]: 'The e-mail or password is incorrect.',
@@ -21,9 +24,12 @@ export const ERROR_MESSAGES = {
   [ErrorCode.AUTH_UNAUTHENTICATED]: 'Sign in to continue.',
   [ErrorCode.CONFLICT]: 'The request conflicts with the current state.',
   [ErrorCode.CSRF_INVALID]: 'The request is missing a valid CSRF token.',
+  [ErrorCode.FILE_TOO_LARGE]: 'The file is too large.',
+  [ErrorCode.FILE_TYPE_NOT_SUPPORTED]: 'This file type is not supported.',
   [ErrorCode.INTERNAL_ERROR]: 'Something went wrong. Please try again later.',
   [ErrorCode.MALFORMED_REQUEST]: 'The request could not be parsed.',
   [ErrorCode.PAYLOAD_TOO_LARGE]: 'The request body is too large.',
+  [ErrorCode.PHOTO_NOT_FOUND]: 'The user has no photo.',
   [ErrorCode.RATE_LIMITED]: 'Too many requests. Please retry later.',
   [ErrorCode.RBAC_ACTION_IN_USE]:
     'Some of the removed actions are still granted. Change those grants first.',
@@ -45,6 +51,8 @@ export const ERROR_MESSAGES = {
   [ErrorCode.REQUEST_REJECTED]: 'The request was rejected.',
   [ErrorCode.ROUTE_NOT_FOUND]: 'The requested resource does not exist.',
   [ErrorCode.SERVICE_UNAVAILABLE]: 'The service is temporarily unavailable.',
+  [ErrorCode.STORAGE_UNAVAILABLE]:
+    'File storage is unavailable. Please try again later.',
   [ErrorCode.UNSUPPORTED_MEDIA_TYPE]:
     'The request content type or encoding is not supported.',
   [ErrorCode.USER_EMAIL_TAKEN]: 'This e-mail is already registered.',

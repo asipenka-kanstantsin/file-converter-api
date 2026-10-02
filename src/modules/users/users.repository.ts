@@ -9,6 +9,7 @@ import type {
   NewUser,
   SessionUser,
   User,
+  UserChanges,
   UserCredentials,
 } from './users.types';
 
@@ -18,6 +19,7 @@ const userSelect = {
   email: true,
   id: true,
   lastLoginAt: true,
+  photoFileId: true,
   status: true,
   tokenVersion: true,
 } as const;
@@ -56,6 +58,27 @@ export class UsersRepository {
       },
     });
     return count === 1;
+  }
+
+  // Blocking ends every session at once (token_version + 1, decision A2).
+  async update(id: string, changes: UserChanges): Promise<User> {
+    return this.txHost.tx.user.update({
+      data: {
+        ...changes,
+        ...(changes.status === 'blocked'
+          ? { tokenVersion: { increment: 1 } }
+          : {}),
+      },
+      select: userSelect,
+      where: { id },
+    });
+  }
+
+  async setPhoto(id: string, fileId: null | string): Promise<void> {
+    await this.txHost.tx.user.update({
+      data: { photoFileId: fileId },
+      where: { id },
+    });
   }
 
   async create(input: NewUser): Promise<User> {
@@ -97,6 +120,18 @@ export class UsersRepository {
     if (!row) return null;
     const { roles, ...user } = row;
     return { ...user, roleIds: roles.map((role) => role.roleId) };
+  }
+
+  // FOR UPDATE: for a transaction that then updates the row. A FOR SHARE lock upgraded by an
+  // UPDATE deadlocks against a concurrent one doing the same.
+  async lockForUpdate(id: string): Promise<User | null> {
+    const rows = z
+      .array(z.object({ id: z.string() }))
+      .parse(
+        await this.txHost.tx
+          .$queryRaw`SELECT id FROM users WHERE id = ${id}::uuid FOR UPDATE`,
+      );
+    return rows.length === 0 ? null : this.findById(id);
   }
 
   // FOR SHARE: the account cannot be deleted or change status until the transaction ends.

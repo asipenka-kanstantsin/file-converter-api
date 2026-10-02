@@ -4,6 +4,7 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { AppException, ErrorCode } from '@/common/errors';
 import { AppConfig } from '@/config';
 import { mapPrismaException } from '@/infrastructure/database';
+import { MailService } from '@/infrastructure/mail';
 import { SettingsService } from '@/modules/settings';
 import { type User, UsersService } from '@/modules/users';
 
@@ -34,6 +35,20 @@ export interface ConfirmResult {
   user: User;
 }
 
+// Confirmable without a session through POST/GET /api/auth/confirm; everything else is an
+// account change that needs its owner (E1).
+const PUBLIC_PURPOSES: ReadonlySet<ChallengePurpose> = new Set([
+  'login',
+  'registration',
+]);
+
+function invalidChallenge(): never {
+  throw new AppException(
+    ErrorCode.AUTH_CHALLENGE_INVALID,
+    HttpStatus.BAD_REQUEST,
+  );
+}
+
 function failureReason(error: unknown): string {
   if (error instanceof AppException) return error.code;
   return mapPrismaException(error)?.code ?? 'unexpected';
@@ -50,6 +65,7 @@ export class AuthService {
     private readonly challenges: ChallengesService,
     private readonly config: AppConfig,
     private readonly lockout: LoginLockout,
+    private readonly mail: MailService,
     private readonly passwordHasher: PasswordHasher,
     private readonly sessions: SessionResolver,
     private readonly sessionTokens: SessionTokenService,
@@ -135,14 +151,13 @@ export class AuthService {
     }
     const { user } = credentials;
     if (user.status !== 'active') {
-      this.logger.warn(
-        { reason: ErrorCode.AUTH_ACCOUNT_NOT_VERIFIED, userId: user.id },
-        'login failed',
-      );
-      throw new AppException(
-        ErrorCode.AUTH_ACCOUNT_NOT_VERIFIED,
-        HttpStatus.FORBIDDEN,
-      );
+      // The password is proven, so naming the reason leaks nothing (decision A16).
+      const reason =
+        user.status === 'blocked'
+          ? ErrorCode.AUTH_ACCOUNT_BLOCKED
+          : ErrorCode.AUTH_ACCOUNT_NOT_VERIFIED;
+      this.logger.warn({ reason, userId: user.id }, 'login failed');
+      throw new AppException(reason, HttpStatus.FORBIDDEN);
     }
     if (await this.settings.isEnabled('confirmation.login')) {
       const challenge = await this.startConfirmedLogin(user);
@@ -155,19 +170,79 @@ export class AuthService {
     return { kind: 'signed_in', session, user };
   }
 
+  // POST /api/auth/confirm completes registrations and sign-ins only; an account change is
+  // confirmed by its owner (decision E1). The purpose is checked before the code is compared,
+  // so no attempt is spent and nothing is revealed.
   async confirmWithCode(
     challengeId: string,
     code: string,
   ): Promise<ConfirmResult> {
-    return this.confirm({ challengeId, method: 'code' }, () =>
-      this.challenges.verifyCode(challengeId, code),
-    );
+    return this.confirm({ challengeId, method: 'code' }, async () => {
+      const pending = await this.challenges.peek(challengeId);
+      if (!PUBLIC_PURPOSES.has(pending.purpose)) invalidChallenge();
+      return this.challenges.verifyCode(challengeId, code);
+    });
   }
 
-  // `boundChallengeId` is the `login_challenge` cookie of the browser that opened the link.
+  // Notion "Изменение данных пользователя" 1.3.2: Self asks to change the e-mail; a code and a
+  // link go to the new address. Nothing changes until it is confirmed.
+  async startEmailChange(
+    userId: string,
+    newEmail: string,
+  ): Promise<IssuedChallenge> {
+    const issued = await this.issueEmailChange(userId, newEmail);
+    this.logger.log(
+      { challengeId: issued.challengeId, userId },
+      'email change requested',
+    );
+    this.logConfirmationSent(issued.challengeId, userId);
+    return issued;
+  }
+
+  // 1.3.3: by its owner, with the code or the link token. Purpose and owner are checked first,
+  // so a foreign challenge spends no attempt and reveals nothing (same 400 as unknown).
+  async confirmEmailChange(
+    userId: string,
+    input: { challengeId: string; code: string } | { token: string },
+  ): Promise<User> {
+    const fields: Record<string, string> =
+      'token' in input
+        ? { method: 'link' }
+        : { challengeId: input.challengeId, method: 'code' };
+    const result = await this.confirm(fields, async () => {
+      const challenge =
+        'token' in input
+          ? await this.challenges.verifyToken(input.token)
+          : await this.challenges.peek(input.challengeId);
+      if (
+        challenge.purpose !== 'email_change' ||
+        challenge.user.id !== userId
+      ) {
+        invalidChallenge();
+      }
+      return 'token' in input
+        ? challenge
+        : this.challenges.verifyCode(input.challengeId, input.code);
+    });
+    return result.user;
+  }
+
+  // An admin set the e-mail directly (P5): a pending self request must not overwrite it later,
+  // and the previous address is told. In the admin's transaction.
+  async afterAdminEmailChange(
+    userId: string,
+    previousEmail: string,
+  ): Promise<void> {
+    await this.challenges.voidPending(userId, 'email_change');
+    await this.notifyEmailChanged(userId, previousEmail);
+  }
+
+  // `boundChallengeId` is the `login_challenge` cookie of the browser that opened the link;
+  // `sessionUserId` the account signed in there, if any.
   async confirmWithToken(
     token: string,
     boundChallengeId: string | undefined,
+    sessionUserId?: string,
   ): Promise<ConfirmResult> {
     return this.confirm({ method: 'link' }, async () => {
       const challenge = await this.challenges.verifyToken(token);
@@ -175,6 +250,17 @@ export class AuthService {
       if (challenge.purpose === 'login' && challenge.id !== boundChallengeId) {
         throw new AppException(
           ErrorCode.AUTH_CHALLENGE_OTHER_BROWSER,
+          HttpStatus.FORBIDDEN,
+        );
+      }
+      // An account change by link only where its owner is signed in (E1): a prefetching scanner
+      // or whoever owns a mistyped address cannot complete it.
+      if (
+        !PUBLIC_PURPOSES.has(challenge.purpose) &&
+        challenge.user.id !== sessionUserId
+      ) {
+        throw new AppException(
+          ErrorCode.AUTH_CHALLENGE_SESSION_REQUIRED,
           HttpStatus.FORBIDDEN,
         );
       }
@@ -229,20 +315,61 @@ export class AuthService {
 
   @Transactional()
   private async complete(challenge: Challenge): Promise<User> {
+    // An e-mail change locks the user row before the challenge row — the order an admin's PATCH
+    // uses (user, then voidPending) — and so a block committing meanwhile cannot slip past the
+    // version check.
+    const locked =
+      challenge.purpose === 'email_change'
+        ? await this.users.lockForUpdate(challenge.user.id)
+        : undefined;
     await this.challenges.consume(challenge);
     if (challenge.purpose === 'registration') {
       return this.users.activate(challenge.user.id);
     }
-    const user = await this.users.getActive(challenge.user.id);
-    // Password reset, deletion or a block since the sign-in started void it (decision A2).
-    if (challenge.tokenVersion !== user.tokenVersion) {
-      throw new AppException(
-        ErrorCode.AUTH_CHALLENGE_INVALID,
-        HttpStatus.BAD_REQUEST,
-      );
+    const user = locked ?? (await this.users.getActive(challenge.user.id));
+    if (user.status !== 'active') invalidChallenge();
+    // Password reset, deletion or a block since it started void it (decision A2).
+    if (challenge.tokenVersion !== user.tokenVersion) invalidChallenge();
+    if (challenge.purpose === 'email_change') {
+      if (!challenge.newEmail) invalidChallenge();
+      // Taken meanwhile → 409 USER_EMAIL_TAKEN, and the challenge stays unconsumed (rollback).
+      const changed = await this.users.update(user.id, {
+        email: challenge.newEmail,
+      });
+      await this.notifyEmailChanged(user.id, user.email);
+      this.logger.log({ userId: user.id }, 'email changed');
+      return changed;
     }
     await this.users.recordLogin(user.id);
     return user;
+  }
+
+  @Transactional()
+  private async issueEmailChange(
+    userId: string,
+    newEmail: string,
+  ): Promise<IssuedChallenge> {
+    const user = await this.users.getActive(userId);
+    if (
+      user.email === newEmail ||
+      !(await this.users.isEmailAvailable(newEmail))
+    ) {
+      throw new AppException(ErrorCode.USER_EMAIL_TAKEN, HttpStatus.CONFLICT);
+    }
+    return this.challenges.issue('email_change', user, newEmail);
+  }
+
+  // A notice to the address that was replaced: no secrets, only that it happened.
+  private async notifyEmailChanged(
+    userId: string,
+    previousEmail: string,
+  ): Promise<void> {
+    await this.mail.enqueue(
+      'account.email_changed',
+      previousEmail,
+      {},
+      `account.email_changed:${userId}:${String(Date.now())}`,
+    );
   }
 
   @Transactional()

@@ -2,6 +2,7 @@ import { AppConfig, loadAppConfig } from '@/config';
 
 interface Overrides {
   db?: AppConfig['db'];
+  storage?: AppConfig['storage'];
   throttle?: Partial<AppConfig['throttle']>;
 }
 
@@ -17,6 +18,7 @@ export function testConfig(overrides: Overrides): AppConfig {
     jobs: base.jobs,
     log: base.log,
     mail: base.mail,
+    storage: overrides.storage ?? base.storage,
     throttle: Object.freeze({ ...base.throttle, ...overrides.throttle }),
   });
 }
