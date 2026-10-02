@@ -157,8 +157,8 @@ if (!isSelf && !this.rbac.can(actor, "users", "read")) {
 | Endpoint | Limit (default) | Tracker |
 | --- | --- | --- |
 | login | 5 / min, 20 / hour | IP + normalised email |
-| register, password/forgot, confirm/resend | 3 / min | IP |
-| confirm, password/reset | 10 / min | IP |
+| register, password/forgot, confirm/resend — `@RateLimit('mail')` | 3 / min (`THROTTLE_MAIL_LIMIT`) | IP |
+| confirm (code and link), password/reset — `@RateLimit('confirm')` | 10 / min (`THROTTLE_CONFIRM_LIMIT`) | IP |
 | refresh | 30 / min | IP |
 | everything else | 100 / min | user id or IP |
 

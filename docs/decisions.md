@@ -62,6 +62,12 @@ Branches use `<type>/<TASK-ID>_<short_description>` (`16-git.mdc`). Ids map to N
 | A6 | Confirmation flags per scenario (registration, password reset, login) are runtime settings in the `app_settings` table, edited by an admin through `GET/PATCH /api/admin/settings`. Defaults: all off. | proposed |
 | A7 | Account enumeration: registration of an existing e-mail answers 409 `USER_EMAIL_TAKEN` (the Notion page lists "Email уже зарегистрирован" as an error; the neutral variant is optional). Login always answers one `AUTH_INVALID_CREDENTIALS`. | proposed |
 | A8 | Password policy: 8–128 characters, at least one letter and one digit. Hash: argon2id. | proposed |
+| A9 | Registration without confirmation answers 201 `{ user }` and issues **no** tokens; the user logs in (FC-2). Notion makes tokens on registration optional ("если предусмотрено"). | proposed |
+| A10 | Resend (`POST /api/auth/confirm/resend`) rotates the code and the link of the **same** challenge, resets the attempt counter and the 10-minute expiry; allowed once per 60 s (429 `RATE_LIMITED` + `Retry-After`). A locked challenge (5 wrong codes) is unlocked only by a resend. | proposed |
+| A11 | Until RBAC exists (FC-4) the confirmation flags are changed in the `app_settings` table directly; `GET/PATCH /api/admin/settings` arrives with FC-4. | proposed |
+| A12 | Rate limits: global 100/min; `mail` group (register, resend) 3/min; `confirm` group 10/min — per IP **and per route** (POST and GET confirm count separately), configurable (`THROTTLE_*`). Named groups add `-mail` / `-confirm` suffixed `X-RateLimit-*` / `Retry-After` headers; `Retry-After` itself is always set on 429. Attempt and resend limits on a challenge are enforced in the database, independent of the per-IP limiter. | proposed |
+| A13 | A `pending_verification` account older than the confirmation window (10 min since registration) **and without a live challenge** (a resend extends it) is deleted when someone registers the same e-mail again, so nobody can squat an address. Inside the window a second registration answers 409; the owner uses resend. | proposed |
+| A14 | The magic link is a state-changing `GET /api/auth/confirm?token=` because Notion gives that form. Risk: mail scanners that prefetch links confirm the registration; acceptable for registration (it only proves mailbox access). Login confirmation (FC-2) must not issue session cookies from this GET — to decide there. | proposed |
 
 ## RBAC
 

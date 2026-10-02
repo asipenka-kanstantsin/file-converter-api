@@ -2,8 +2,91 @@ generator client {
   provider     = "prisma-client"
   output       = "../src/generated/prisma"
   moduleFormat = "cjs"
+  // Extensionless relative imports resolve the same way in tsc, Jest and ts-node (CommonJS).
+  importFileExtension = ""
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+enum UserStatus {
+  active
+  pending_verification
+
+  @@map("user_status")
+}
+
+model User {
+  id           String      @id @default(uuid(7)) @db.Uuid
+  email        String      @unique(map: "users_email_key") @db.VarChar(254)
+  passwordHash String      @map("password_hash")
+  status       UserStatus
+  tokenVersion Int         @default(0) @map("token_version")
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  challenges   Challenge[]
+
+  @@map("users")
+}
+
+enum ChallengePurpose {
+  registration
+
+  @@map("challenge_purpose")
+}
+
+// One pending e-mail confirmation (decision A4): a hashed 6-digit code and a hashed magic-link
+// token for the same action.
+model Challenge {
+  id         String           @id @default(uuid(7)) @db.Uuid
+  purpose    ChallengePurpose
+  userId     String           @map("user_id") @db.Uuid
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash   String           @map("code_hash") @db.Char(64)
+  tokenHash  String           @unique(map: "challenges_token_hash_key") @map("token_hash") @db.Char(64)
+  attempts   Int              @default(0)
+  expiresAt  DateTime         @map("expires_at") @db.Timestamptz(3)
+  lastSentAt DateTime         @map("last_sent_at") @db.Timestamptz(3)
+  consumedAt DateTime?        @map("consumed_at") @db.Timestamptz(3)
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId, purpose], map: "challenges_user_id_purpose_idx")
+  @@map("challenges")
+}
+
+// Runtime settings an admin can change without a deploy (decisions A6, F1).
+model AppSetting {
+  key       String   @id @db.VarChar(100)
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("app_settings")
+}
+
+enum OutboxStatus {
+  pending
+  processing
+  done
+  dead
+
+  @@map("outbox_status")
+}
+
+// Transactional outbox (20-jobs): side effects written with the business change, delivered after.
+model OutboxMessage {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  type           String       @db.VarChar(100)
+  payload        Json
+  idempotencyKey String?      @unique(map: "outbox_messages_idempotency_key_key") @map("idempotency_key") @db.VarChar(200)
+  status         OutboxStatus @default(pending)
+  attempts       Int          @default(0)
+  nextAttemptAt  DateTime     @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  lockedUntil    DateTime?    @map("locked_until") @db.Timestamptz(3)
+  lastError      String?      @map("last_error") @db.VarChar(1000)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  processedAt    DateTime?    @map("processed_at") @db.Timestamptz(3)
+
+  @@index([status, nextAttemptAt], map: "outbox_messages_status_next_attempt_at_idx")
+  @@map("outbox_messages")
 }

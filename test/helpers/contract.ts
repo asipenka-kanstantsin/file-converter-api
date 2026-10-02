@@ -119,20 +119,29 @@ function checkHeaders(
       name,
     ]);
     const raw: unknown = res.headers[name.toLowerCase()];
-    if (typeof raw !== 'string') {
+    // Set-Cookie arrives as an array: the header is valid when one of its values is.
+    const values = (Array.isArray(raw) ? raw : [raw]).filter(
+      (value): value is string => typeof value === 'string',
+    );
+    if (values.length === 0) {
       if (header.value.required) fail(label, `is missing header ${name}`);
       continue;
     }
     if (header.value.schema === undefined) continue;
     const validate = validator([...header.pointer, 'schema']);
-    const numeric = Number(raw);
-    const value = raw !== '' && Number.isFinite(numeric) ? numeric : raw;
-    // Ajv's validator is a type guard that would narrow `raw` to never; use a plain boolean.
+    // Ajv's validator is a type guard that would narrow values to never; use a plain boolean.
     const accepts = (data: unknown): boolean => validate(data);
-    if (!accepts(value) && !accepts(raw)) {
+    const valid = values.some((value) => {
+      const numeric = Number(value);
+      return (
+        (value !== '' && Number.isFinite(numeric) && accepts(numeric)) ||
+        accepts(value)
+      );
+    });
+    if (!valid) {
       fail(
         label,
-        `header ${name}=${raw} invalid: ${ajv.errorsText(validate.errors)}`,
+        `header ${name}=${values.join(' | ')} invalid: ${ajv.errorsText(validate.errors)}`,
       );
     }
   }

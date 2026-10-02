@@ -2,8 +2,15 @@ import { InvalidConfigError, parseAppConfig } from './load-app-config';
 
 const validEnv = {
   APP_CORS_ORIGINS: 'https://app.example.com, https://admin.example.com',
+  APP_PUBLIC_URL: 'https://api.example.com/',
+  AUTH_OTP_PEPPER: 'p'.repeat(32),
   DATABASE_URL: 'postgresql://app:app@localhost:5432/app',
+  MAIL_FROM: 'File Converter <no-reply@example.com>',
   NODE_ENV: 'production',
+  SMTP_HOST: 'pro.turbo-smtp.com',
+  SMTP_PASS: 'smtp-pass',
+  SMTP_PORT: '587',
+  SMTP_USER: 'smtp-user',
 };
 
 describe('parseAppConfig', () => {
@@ -14,10 +21,28 @@ describe('parseAppConfig', () => {
       corsOrigins: ['https://app.example.com', 'https://admin.example.com'],
       jsonBodyLimit: '1mb',
       port: 3001,
+      publicUrl: 'https://api.example.com',
       trustProxy: 0,
     });
+    expect(config.confirmation).toEqual({
+      maxAttempts: 5,
+      resendCooldownSeconds: 60,
+      ttlSeconds: 600,
+    });
+    expect(config.mail.smtp).toEqual({
+      host: 'pro.turbo-smtp.com',
+      pass: 'smtp-pass',
+      port: 587,
+      secure: false,
+      user: 'smtp-user',
+    });
     expect(config.log).toEqual({ level: 'info', pretty: false });
-    expect(config.throttle).toEqual({ limit: 100, ttlSeconds: 60 });
+    expect(config.throttle).toEqual({
+      confirmLimit: 10,
+      limit: 100,
+      mailLimit: 3,
+      ttlSeconds: 60,
+    });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.app.corsOrigins)).toBe(true);
   });
@@ -73,6 +98,15 @@ describe('parseAppConfig', () => {
         NODE_ENV: 'development',
       }).app.corsOrigins,
     ).toEqual(['http://localhost:3000']);
+  });
+
+  it('requires secure cookies and SMTP credentials in production', () => {
+    expect(() =>
+      parseAppConfig({ ...validEnv, AUTH_COOKIE_SECURE: 'false' }),
+    ).toThrow(/AUTH_COOKIE_SECURE/);
+    expect(() => parseAppConfig({ ...validEnv, SMTP_PASS: '' })).toThrow(
+      /SMTP_USER/,
+    );
   });
 
   it('rejects a missing required variable', () => {

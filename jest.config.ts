@@ -4,7 +4,6 @@ const shared = {
   moduleFileExtensions: ['js', 'json', 'ts'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
-    '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   rootDir: '.',
   testEnvironment: 'node',

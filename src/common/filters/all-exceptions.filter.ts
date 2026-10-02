@@ -79,18 +79,27 @@ function bodyParserCode(status: number): ErrorCode {
 
 function validationContext(error: ZodError): ErrorContext {
   return {
-    fields: error.issues.map((issue) => ({
-      code: issue.code,
-      detail: validationMessage(issue.code),
-      path: issue.path.map(String).join('.'),
-    })),
+    fields: error.issues.map((issue) => {
+      // Custom refinements carry a machine code as their message (06-validation).
+      const code = issue.code === 'custom' ? issue.message : issue.code;
+      return {
+        code,
+        detail: validationMessage(code),
+        path: issue.path.map(String).join('.'),
+      };
+    }),
   };
 }
 
+// Named throttlers set `Retry-After-<name>`; the default one sets `Retry-After`.
 function retryAfterSeconds(response: Response): number | undefined {
-  const header = response.getHeader('Retry-After');
-  const seconds = Number(Array.isArray(header) ? header[0] : header);
-  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
+  for (const name of response.getHeaderNames()) {
+    if (!name.toLowerCase().startsWith('retry-after')) continue;
+    const header = response.getHeader(name);
+    const seconds = Number(Array.isArray(header) ? header[0] : header);
+    if (Number.isFinite(seconds) && seconds > 0) return seconds;
+  }
+  return undefined;
 }
 
 function routePath(request: Request): string | undefined {
@@ -118,6 +127,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     this.log(exception, resolved, request);
     if (response.headersSent) return;
+
+    const retryAfter = resolved.context?.retryAfter;
+    if (
+      resolved.code === ErrorCode.RATE_LIMITED &&
+      typeof retryAfter === 'number'
+    ) {
+      response.setHeader('Retry-After', String(retryAfter));
+    }
 
     const body: ErrorEnvelope = {
       code: resolved.code,
@@ -195,6 +212,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
       this.logger.error({ ...fields, err: exception }, 'request failed');
     } else if (WARN_STATUSES.has(resolved.status)) {
       this.logger.warn(fields, 'request rejected');
+    } else {
+      // Rejected attempts are audit events too (e.g. an invalid registration, Notion 1.5).
+      this.logger.log(fields, 'request rejected');
     }
   }
 }

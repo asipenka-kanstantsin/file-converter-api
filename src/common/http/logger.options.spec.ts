@@ -1,21 +1,25 @@
 import type { IncomingMessage } from 'node:http';
 
-import { type AppConfig, buildAppConfig } from '@/config';
+import { type AppConfig, parseAppConfig } from '@/config';
 
-import { buildLoggerOptions, REDACTED_PATHS } from './logger.options';
+import {
+  buildLoggerOptions,
+  REDACTED_PATHS,
+  serializeRequest,
+} from './logger.options';
 
 function config(pretty: boolean): AppConfig {
-  return buildAppConfig({
-    APP_CORS_ORIGINS: ['http://localhost:3000'],
-    APP_JSON_BODY_LIMIT: '1mb',
-    APP_PORT: 3001,
-    APP_TRUST_PROXY: 0,
+  return parseAppConfig({
+    APP_CORS_ORIGINS: 'http://localhost:3000',
+    APP_PUBLIC_URL: 'http://localhost:3001',
+    AUTH_OTP_PEPPER: 'x'.repeat(32),
     DATABASE_URL: 'postgresql://app:app@localhost:5432/app',
     LOG_LEVEL: 'warn',
-    LOG_PRETTY: pretty,
+    LOG_PRETTY: String(pretty),
+    MAIL_FROM: 'test@example.com',
     NODE_ENV: 'test',
-    THROTTLE_LIMIT: 100,
-    THROTTLE_TTL_SECONDS: 60,
+    SMTP_HOST: 'localhost',
+    SMTP_PORT: '1025',
   });
 }
 
@@ -64,5 +68,22 @@ describe('buildLoggerOptions', () => {
     expect(
       (buildLoggerOptions(config(true)).pinoHttp as PinoOptions).transport,
     ).toBeDefined();
+  });
+
+  it('logs the request line without query string or headers', () => {
+    const serialized = serializeRequest({
+      headers: { cookie: 'access_token=secret' },
+      id: 'req-1',
+      method: 'GET',
+      url: '/api/auth/confirm?token=SECRET-TOKEN',
+    } as Parameters<typeof serializeRequest>[0]);
+
+    expect(serialized).toEqual({
+      id: 'req-1',
+      method: 'GET',
+      path: '/api/auth/confirm',
+    });
+    expect(JSON.stringify(serialized)).not.toContain('SECRET');
+    expect(serializeRequest({}).path).toBe('');
   });
 });

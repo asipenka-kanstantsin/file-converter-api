@@ -17,6 +17,8 @@ info:
     - Every path is under `/api`, except the monitoring endpoints `/health`, `/health/live` and
       `/health/ready`.
     - A path that does not exist answers `404` with `ErrorEnvelope` and code `ROUTE_NOT_FOUND`.
+    - Endpoints with a stricter rate-limit group also send `X-RateLimit-*-<group>` and
+      `Retry-After-<group>` headers; every `429` carries plain `Retry-After`.
   license:
     name: UNLICENSED
     identifier: UNLICENSED
@@ -26,6 +28,8 @@ servers:
 tags:
   - name: system
     description: Health checks and the API contract itself.
+  - name: auth
+    description: Registration, e-mail confirmation (OTP or magic link) and CSRF.
 security: []
 
 paths:
@@ -118,8 +122,183 @@ paths:
         default:
           $ref: '#/components/responses/Default'
 
+  /api/auth/csrf:
+    get:
+      operationId: auth_csrf
+      tags: [auth]
+      summary: Issue the CSRF cookie
+      description: |
+        Sets `csrf_token` (readable by JavaScript). Every unsafe request (POST, PUT, PATCH, DELETE)
+        must echo it in the `X-CSRF-Token` header.
+      responses:
+        '204':
+          description: Cookie set.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              $ref: '#/components/headers/SetCsrfCookie'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/auth/register:
+    post:
+      operationId: auth_register
+      tags: [auth]
+      summary: Register with e-mail and password
+      description: |
+        When e-mail confirmation for registration is off (admin setting), the account is created
+        active (201). When it is on, the account is created `pending_verification` and a 6-digit
+        code plus a magic link are e-mailed (202); finish with `POST /api/auth/confirm` or
+        `GET /api/auth/confirm?token=`.
+      security:
+        - csrfHeader: []
+          csrfCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Registered; the account is active.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '202':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '409':
+          description: The e-mail is already registered.
+          x-error-codes: [USER_EMAIL_TAKEN]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/auth/confirm:
+    post:
+      operationId: auth_confirmWithCode
+      tags: [auth]
+      summary: Confirm a pending action with the e-mailed 6-digit code
+      security:
+        - csrfHeader: []
+          csrfCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmWithCodeRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/Confirmed'
+        '400':
+          $ref: '#/components/responses/ConfirmationFailed'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '423':
+          $ref: '#/components/responses/ChallengeLocked'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    get:
+      operationId: auth_confirmWithLink
+      tags: [auth]
+      summary: Confirm a pending action with the e-mailed magic link
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/MagicLinkToken'
+      responses:
+        '200':
+          $ref: '#/components/responses/Confirmed'
+        '400':
+          $ref: '#/components/responses/ConfirmationFailed'
+        '423':
+          $ref: '#/components/responses/ChallengeLocked'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/auth/confirm/resend:
+    post:
+      operationId: auth_resendConfirmation
+      tags: [auth]
+      summary: E-mail a new code and link for a pending challenge
+      description: |
+        Replaces the code and the link of the same challenge, resets the attempt counter and the
+        10-minute expiry. Allowed once per 60 seconds per challenge.
+      security:
+        - csrfHeader: []
+          csrfCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResendConfirmationRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '400':
+          description: Invalid input or no pending challenge with this id.
+          x-error-codes: [AUTH_CHALLENGE_INVALID, VALIDATION_FAILED]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
 components:
+  securitySchemes:
+    csrfCookie:
+      type: apiKey
+      in: cookie
+      name: csrf_token
+      description: Set by `GET /api/auth/csrf`.
+    csrfHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: Must equal the `csrf_token` cookie (double submit).
+
   headers:
+    SetCsrfCookie:
+      description: '`csrf_token=<random>; Path=/; SameSite=Lax` (not HttpOnly, so the client can echo it).'
+      required: true
+      schema:
+        type: string
+        pattern: '^csrf_token=[A-Za-z0-9_-]{43};'
     RequestId:
       description: Request id — echoed from a valid incoming `X-Request-Id` or generated.
       required: true
@@ -156,7 +335,12 @@ components:
       type: string
       description: Stable machine-readable error code. Clients branch on it, never on `detail`.
       enum:
+        - AUTH_CHALLENGE_EXPIRED
+        - AUTH_CHALLENGE_INVALID
+        - AUTH_CHALLENGE_LOCKED
+        - AUTH_CODE_INVALID
         - CONFLICT
+        - CSRF_INVALID
         - INTERNAL_ERROR
         - MALFORMED_REQUEST
         - PAYLOAD_TOO_LARGE
@@ -165,6 +349,7 @@ components:
         - ROUTE_NOT_FOUND
         - SERVICE_UNAVAILABLE
         - UNSUPPORTED_MEDIA_TYPE
+        - USER_EMAIL_TAKEN
         - VALIDATION_FAILED
 
     ErrorEnvelope:
@@ -214,6 +399,143 @@ components:
                 checks:
                   $ref: '#/components/schemas/HealthChecks'
 
+    ValidationErrorEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ErrorEnvelope'
+        - type: object
+          required: [context]
+          properties:
+            code:
+              const: VALIDATION_FAILED
+            context:
+              type: object
+              additionalProperties: false
+              required: [fields]
+              properties:
+                fields:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [code, detail, path]
+                    properties:
+                      code:
+                        type: string
+                        description: zod issue code, e.g. `too_small`, `invalid_format`.
+                      detail:
+                        type: string
+                      path:
+                        type: string
+                        description: Dot-joined field path, e.g. `email`.
+
+    CodeInvalidEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ErrorEnvelope'
+        - type: object
+          required: [context]
+          properties:
+            code:
+              const: AUTH_CODE_INVALID
+            context:
+              type: object
+              additionalProperties: false
+              required: [attemptsLeft]
+              properties:
+                attemptsLeft:
+                  type: integer
+                  minimum: 1
+
+    Email:
+      type: string
+      format: email
+      maxLength: 254
+      description: Trimmed and lower-cased by the server.
+      examples: [jane@example.com]
+
+    Password:
+      type: string
+      minLength: 8
+      maxLength: 128
+      description: 8–128 characters with at least one letter and one digit.
+      writeOnly: true
+
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          $ref: '#/components/schemas/Email'
+        password:
+          $ref: '#/components/schemas/Password'
+
+    User:
+      type: object
+      additionalProperties: false
+      required: [createdAt, email, id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        status:
+          type: string
+          enum: [active, pending_verification]
+        createdAt:
+          type: string
+          format: date-time
+
+    UserEnvelope:
+      type: object
+      additionalProperties: false
+      required: [user]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+
+    ChallengeId:
+      type: string
+      format: uuid
+      description: Identifies a pending e-mail confirmation.
+
+    ConfirmationRequired:
+      type: object
+      additionalProperties: false
+      required: [challengeId, expiresAt, requiresConfirmation]
+      properties:
+        requiresConfirmation:
+          const: true
+        challengeId:
+          $ref: '#/components/schemas/ChallengeId'
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the e-mailed code and link stop working.
+
+    ConfirmWithCodeRequest:
+      type: object
+      required: [challengeId, code]
+      properties:
+        challengeId:
+          $ref: '#/components/schemas/ChallengeId'
+        code:
+          type: string
+          pattern: '^\d{6}$'
+          writeOnly: true
+
+    MagicLinkToken:
+      type: string
+      pattern: '^[A-Za-z0-9_-]{43}$'
+
+    ResendConfirmationRequest:
+      type: object
+      required: [challengeId]
+      properties:
+        challengeId:
+          $ref: '#/components/schemas/ChallengeId'
+
     HealthChecks:
       type: object
       additionalProperties: false
@@ -242,6 +564,77 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/HealthReport'
+    ValidationFailed:
+      description: Invalid input.
+      x-error-codes: [VALIDATION_FAILED]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorEnvelope'
+    CsrfInvalid:
+      description: The `X-CSRF-Token` header is missing or does not match the `csrf_token` cookie.
+      x-error-codes: [CSRF_INVALID]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ConfirmationRequired:
+      description: A code and a magic link were e-mailed; confirmation is required.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ConfirmationRequired'
+    Confirmed:
+      description: The pending action is complete.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/UserEnvelope'
+    ConfirmationFailed:
+      description: >-
+        Invalid input, unknown or already used challenge or link, expired challenge, or a wrong
+        code (`context.attemptsLeft`).
+      x-error-codes:
+        - AUTH_CHALLENGE_EXPIRED
+        - AUTH_CHALLENGE_INVALID
+        - AUTH_CODE_INVALID
+        - VALIDATION_FAILED
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            anyOf:
+              - $ref: '#/components/schemas/ValidationErrorEnvelope'
+              - $ref: '#/components/schemas/CodeInvalidEnvelope'
+              - allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - properties:
+                      code:
+                        enum: [AUTH_CHALLENGE_EXPIRED, AUTH_CHALLENGE_INVALID]
+    ChallengeLocked:
+      description: Too many wrong codes; request a new code with `POST /api/auth/confirm/resend`.
+      x-error-codes: [AUTH_CHALLENGE_LOCKED]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
     RateLimited:
       description: Too many requests.
       x-error-codes: [RATE_LIMITED]

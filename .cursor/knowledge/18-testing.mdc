@@ -26,7 +26,7 @@ Mailpit as service containers); a green `verify` locally should mean a green pip
 | e2e | `test/**/*.e2e-spec.ts` | `jest.config.ts` project `e2e`, `--runInBand`, `globalSetup` runs `prisma migrate deploy` on `app_test` |
 | Helpers | `test/helpers/` | app factory, db reset, factories, auth, mail reader |
 
-`ts-jest`, `moduleNameMapper` for `@/` and for the `.js` suffixes in the generated Prisma client.
+`ts-jest`, `moduleNameMapper` for `@/`.
 Jest runs under `node --experimental-vm-modules` (the npm scripts do it): the Prisma 7 client loads
 its WASM query compiler through dynamic `import()`. Test env via `.env.test` loaded by the
 config module — never `process.env` in a spec.

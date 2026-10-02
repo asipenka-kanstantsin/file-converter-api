@@ -58,6 +58,7 @@ generator client {
   provider     = "prisma-client"
   output       = "../src/generated/prisma"
   moduleFormat = "cjs"
+  importFileExtension = ""   // extensionless imports: tsc, Jest and ts-node resolve them alike
 }
 
 datasource db {
@@ -186,7 +187,7 @@ return toCursorPage(rows, limit, (row) => ({ id: row.id, v: row[column] }));
 
 | Code | Meaning | Response |
 | --- | --- | --- |
-| `P2002` | unique violation | 409, code from `meta.target` / constraint map (`users_email_key → USER_EMAIL_TAKEN`), else `CONFLICT` |
+| `P2002` | unique violation | 409, code from the constraint map keyed by `meta.driverAdapterError.cause.constraint.index` (`users_email_key → USER_EMAIL_TAKEN`), else `CONFLICT` |
 | `P2003` | FK violation | 409 or 400 per constraint map |
 | `P2025` | record to update/delete not found | 404 with the entity's code |
 

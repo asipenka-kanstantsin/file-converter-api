@@ -17,6 +17,7 @@ import { AllExceptionsFilter } from './all-exceptions.filter';
 
 interface Captured {
   body?: unknown;
+  headers?: Record<string, string>;
   status?: number;
 }
 
@@ -30,10 +31,14 @@ function host(
   const captured: Captured = {};
   const response = {
     getHeader: (name: string) => headers[name],
+    getHeaderNames: () => Object.keys(headers),
     headersSent,
     json(body: unknown) {
       captured.body = body;
       return response;
+    },
+    setHeader(name: string, value: string) {
+      captured.headers = { ...captured.headers, [name]: value };
     },
     status(status: number) {
       captured.status = status;
@@ -190,6 +195,48 @@ describe('AllExceptionsFilter', () => {
     );
   });
 
+  it('reads Retry-After-<name> from named throttlers and echoes it as Retry-After', () => {
+    const { captured, host: h } = host({ 'Retry-After-mail': '17' });
+
+    filter.catch(new ThrottlerException(), h);
+
+    expect(captured).toMatchObject({
+      body: { context: { retryAfter: 17 } },
+      headers: { 'Retry-After': '17' },
+      status: 429,
+    });
+  });
+
+  it('sets Retry-After for an application-level RATE_LIMITED', () => {
+    const { captured, host: h } = host();
+
+    filter.catch(
+      new AppException(ErrorCode.RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS, {
+        retryAfter: 9,
+      }),
+      h,
+    );
+
+    expect(captured.headers).toEqual({ 'Retry-After': '9' });
+  });
+
+  it('reports a custom refinement by its machine code', () => {
+    const result = z
+      .object({
+        password: z
+          .string()
+          .refine(() => false, { message: 'password_too_weak' }),
+      })
+      .safeParse({ password: 'x' });
+    const { captured, host: h } = host();
+
+    filter.catch(new ZodValidationException(result.error), h);
+
+    expect(captured.body).toMatchObject({
+      context: { fields: [{ code: 'password_too_weak', path: 'password' }] },
+    });
+  });
+
   it.each([[{}], [{ 'Retry-After': 'soon' }]])(
     'omits retryAfter when the header is missing or not a number (%p)',
     (headers) => {
@@ -215,11 +262,18 @@ describe('AllExceptionsFilter', () => {
     });
   });
 
-  it('does not log ordinary client errors', () => {
+  it('logs ordinary client errors at info level only', () => {
+    const logSpy = jest
+      .spyOn(Logger.prototype, 'log')
+      .mockImplementation(() => undefined);
     const { host: h } = host();
 
     filter.catch(new NotFoundException(), h);
 
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'ROUTE_NOT_FOUND', status: 404 }),
+      'request rejected',
+    );
     expect(warnSpy).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
   });

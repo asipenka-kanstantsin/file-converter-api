@@ -13,12 +13,7 @@ infrastructure/mail/
   mail.service.ts            enqueue(tx, template, to, vars) + deliver(message)
   mail-transport.ts          MailTransport interface + MAIL_TRANSPORT token
   smtp.transport.ts          nodemailer adapter
-  template-registry.ts       template name → zod variables schema
-  template-renderer.ts       Handlebars: layout + per-locale subject/html/text
-  templates/
-    layouts/base.html.hbs
-    layouts/base.text.hbs
-    <template>/<locale>/{subject.hbs,html.hbs,text.hbs}
+  mail-templates.ts          template name → zod variables schema + render() to subject/text/html
 ```
 
 Modules call `MailService.enqueue()` only. Nothing outside `infrastructure/mail` imports nodemailer.
@@ -82,12 +77,10 @@ export type MailTemplate = keyof typeof mailTemplates;
 export type MailVars<T extends MailTemplate> = z.infer<(typeof mailTemplates)[T]>;
 ```
 
-- Handlebars, one shared layout (header, footer, unsubscribe/legal line) for html and for text.
-- Every template has `subject`, `html` **and** `text` in **every** supported locale. A parity test
-  fails on a missing file (`13-i18n.mdc`).
-- Strings inside templates are the translation; there is no second catalogue for mail bodies.
-  Shared fragments (footer, greeting) live in `src/i18n/<locale>/mail.json`.
-- Use `{{var}}` (escaped). `{{{var}}}` only for HTML the server itself produced.
+- Templates are typed TypeScript functions (no template engine for one locale, decision H4): each
+  returns `subject`, `text` **and** `html`; every variable goes through `escapeHtml` in the html part.
+- The template's zod schema is checked on enqueue and again on delivery (a bad payload is a
+  `PermanentJobError` → `dead`).
 - Links are built from `config.app.publicUrl`, never from the request `Host` header.
 - Inline CSS in the layout; no remote images that track opens unless the AC asks for it.
 
@@ -105,8 +98,9 @@ await this.db.transaction(async (tx) => {
   mail; commit → mail eventually.
 - Locale is the recipient's stored `locale`, captured at enqueue time, not the request's
   `X-Locale` (`13-i18n.mdc`).
-- The payload stores template, locale, recipient and vars — not rendered HTML. Rendering happens at
-  delivery, so a template fix applies to queued mail.
+- The payload stores template, recipient and vars — not rendered HTML. Rendering happens at
+  delivery, so a template fix applies to queued mail. Vars may hold one-time secrets (codes,
+  links): the dispatcher replaces the payload with `{}` once the row is `done`.
 - Idempotency key per message (`<template>:<entityId>:<purpose>`, unique index). Sent as
   `X-Entity-Ref-ID` header too; the dispatcher never sends the same key twice.
 - The request returns without waiting for SMTP. An endpoint whose only job is to send mail returns
