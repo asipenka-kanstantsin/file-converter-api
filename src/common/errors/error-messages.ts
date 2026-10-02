@@ -32,6 +32,7 @@ export const ERROR_MESSAGES = {
   [ErrorCode.FILE_PARSE_ERROR]: 'The file is not valid for its format.',
   [ErrorCode.FILE_TOO_LARGE]: 'The file is too large.',
   [ErrorCode.FILE_TYPE_NOT_SUPPORTED]: 'This file type is not supported.',
+  [ErrorCode.IMAGE_TOO_LARGE]: 'The image would be larger than allowed.',
   [ErrorCode.INTERNAL_ERROR]: 'Something went wrong. Please try again later.',
   [ErrorCode.MALFORMED_REQUEST]: 'The request could not be parsed.',
   [ErrorCode.PAGINATION_CURSOR_INVALID]:
@@ -63,6 +64,8 @@ export const ERROR_MESSAGES = {
     'File storage is unavailable. Please try again later.',
   [ErrorCode.STRUCTURE_TOO_COMPLEX]:
     'The file is nested too deeply or is too large to convert.',
+  [ErrorCode.SVG_UNSAFE]:
+    'The SVG contains scripts, external references or other active content.',
   [ErrorCode.UNSUPPORTED_MEDIA_TYPE]:
     'The request content type or encoding is not supported.',
   [ErrorCode.USER_EMAIL_TAKEN]: 'This e-mail is already registered.',

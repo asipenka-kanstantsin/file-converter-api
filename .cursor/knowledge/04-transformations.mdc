@@ -64,12 +64,14 @@ export abstract class FileTransformer {
 
 ## Execution
 
-- Text conversion runs in a **worker thread pool** (`piscina`, size = CPU count − 1, min 1) so
-  parsing never blocks the event loop (Notion NFR). Each task has an `AbortSignal` with
-  `CONVERSION_TIMEOUT_MS` (30 s). The Notion contracts list only 400/401/413/415, so a timeout is
-  400 `CONVERSION_TIMEOUT` and is recorded in history as `error`.
-- Images run through `sharp` (native, libuv thread pool) with `limitInputPixels` and
-  `sequentialRead`; no worker needed.
+- Text conversion runs in a **worker thread pool** (`piscina`, up to 4 threads, 1 GB heap each,
+  at most threads × 5 jobs in flight → 503 beyond) so parsing never blocks the event loop. Each
+  task has an `AbortSignal` with `CONVERSION_TIMEOUT_MS` (30 s, queue wait included). A timeout
+  is 400 `CONVERSION_TIMEOUT` and is recorded in history as `error`.
+- Rasters (PNG/JPEG) run through `sharp` in-process (libuv pool) with `limitInputPixels` 50 MP,
+  `.rotate()` and sharp's timeout; at most 2 at once. **SVG is rasterised in a child process**
+  (`svg-render.child`) killed at the timeout, at most 2 at once: librsvg renders in one call that
+  no in-process timeout can interrupt (decision F11).
 - **Atomic response**: the whole result is produced before the first byte is sent, then streamed
   (`StreamableFile`). A failure after headers are sent must be impossible by construction.
 - Headers: `Content-Type` of the target, `Content-Disposition: attachment; filename="converted.<ext>"`.
@@ -80,7 +82,7 @@ export abstract class FileTransformer {
 | --- | --- |
 | PNG | magic `89 50 4E 47 0D 0A 1A 0A` |
 | JPEG | magic `FF D8 FF` |
-| SVG | UTF-8 text whose root element is `<svg` (after optional XML declaration / comments) |
+| SVG | UTF-8 text whose root element is `<svg` (after optional XML declaration / comments / a DTD) in the first 8 KB |
 | JSON | parses as JSON (RFC 8259) |
 | XML | starts with `<` (after BOM/whitespace) and is not SVG |
 | YAML / CSV | by extension (`.yaml`/`.yml`, `.csv`) then by successful parse |
@@ -89,24 +91,26 @@ Detected format ≠ claimed extension → detection wins. Unknown → 415 `FILE_
 
 ## Limits (runtime settings, decision F1)
 
-`app_settings` keys `limits.input.<format>` (bytes), `limits.svg.maxWidth/maxHeight` (px),
-`history.retentionDays`. Read through `SettingsService` (cached, invalidated on admin update).
-Over the limit → 413 `FILE_TOO_LARGE` with `context.maxBytes`.
+`app_settings` keys `convert.maxBytes.<format>` (bytes), `convert.svg.maxWidth/maxHeight` (px),
+`history.retentionDays` (the `SETTINGS` catalogue, read through `SettingsService`). Over the
+limit → 413 `FILE_TOO_LARGE` with `context.maxBytes` and `context.format`.
 
 ## Parser security
 
-- **XML**: `fast-xml-parser` with `processEntities: false`, no DOCTYPE allowed (reject input
-  containing `<!DOCTYPE` / `<!ENTITY` → 400 `FILE_INVALID`): no XXE, no billion laughs.
-- **Depth / size**: reject documents nested deeper than 64 levels or with more than 1 000 000 nodes
-  (resource attack).
+- **XML**: `fast-xml-parser`, no DOCTYPE allowed (`<!DOCTYPE` / `<!ENTITY` → 400
+  `FILE_PARSE_ERROR`), only the predefined and numeric entities: no XXE, no billion laughs.
+- **Depth / size**: see `docs/conversion-rules.md` (64 levels, 5 000 000 values, 50 M characters
+  expanded, 100 M output, CSV 10 000 columns / 10 M cells) → 400 `STRUCTURE_TOO_COMPLEX`.
 - **YAML**: `yaml` with `maxAliasCount: 100`, schema `core` (YAML 1.2), no custom tags.
 - **CSV**: RFC 4180 via `csv-parse`, BOM stripped, `max_record_size` bounded.
-- **SVG**: reject `<script>`, `on*=` attributes, `javascript:` URLs, `<foreignObject>`, external
-  `href`/`xlink:href` (anything not `#…` or `data:image/…`), DOCTYPE/entities → 400
-  `SVG_UNSAFE`. Raster size = requested or intrinsic size; above the configured max → 400
-  `IMAGE_DIMENSIONS_EXCEEDED`.
+- **SVG**: `svg-sanitizer.ts` — parse (no DTD), allowlist of elements and attributes checked
+  **after decoding**, every `href`/`url()` must be `#fragment` (no `data:`), no `<style>`/`style=`,
+  no filters; the re-serialised document is what gets rendered → else 400 `SVG_UNSAFE`. Raster
+  size = requested or intrinsic; above the configured max → 400 `IMAGE_TOO_LARGE`. Never scan
+  raw SVG text with patterns: entities and CSS escapes decode after the check.
 - **Encoding**: input must be UTF-8 (BOM stripped); otherwise 400 `FILE_ENCODING_INVALID`.
-- Decompression bombs: `sharp({ limitInputPixels: maxWidth * maxHeight })`.
+- Decompression bombs: rasters `sharp({ limitInputPixels: 50 MP })` → `IMAGE_TOO_LARGE`; SVG cannot
+  embed images, and its render size is checked before rendering.
 
 ## Ambiguous pairs
 

@@ -46,7 +46,7 @@ tags:
     description: Runtime settings.
   - name: transformations
     description: >-
-      File conversions (CSV, JSON, XML, YAML) and their history. Every attempt is recorded; a
+      File (CSV, JSON, XML, YAML) and image (PNG, JPEG, SVG) conversions and their history. Every attempt is recorded; a
       result can be saved for download.
 security: []
 
@@ -1122,6 +1122,132 @@ paths:
         default:
           $ref: '#/components/responses/Default'
 
+  /api/images/convert:
+    post:
+      operationId: transformations_convertImage
+      tags: [transformations]
+      summary: Convert a PNG, JPEG or SVG image
+      description: |
+        Multipart fields: `file`, `targetFormat` (`png` | `jpeg` | `svg`), optional `save`
+        (`true` | `false`) and optional `options`, a JSON object: `quality` (1–100, JPEG output),
+        `width` / `height` (pixels, SVG rasterisation; one alone keeps the aspect ratio; default the
+        SVG's intrinsic size) and `background` (`#rgb` or `#rrggbb`, default `#ffffff`; used for
+        SVG and for transparency in JPEG output); unknown keys are refused. Supported: PNG → JPEG,
+        JPEG → PNG, SVG → PNG, SVG → JPEG; a raster is never turned into SVG (400
+        `CONVERSION_NOT_SUPPORTED`). The format is detected from the content (magic bytes / an
+        `<svg>` root), never from the name. SVG is checked against an allowlist after decoding:
+        shapes, text, gradients, patterns, masks, clip paths, markers and `use` only — no
+        `<style>` or `style`, `<image>`, scripts, event handlers, `<foreignObject>`, links,
+        animation or filters; every reference must be `#id` inside the document; no CSS escapes;
+        no DTD (400 `SVG_UNSAFE`). It is rendered in a separate process stopped at the timeout. A
+        raster may decode to at most 50 megapixels (400 `IMAGE_TOO_LARGE`, `context.maxPixels`) and
+        an SVG may be rendered at most to the admin's maximum size (400 `IMAGE_TOO_LARGE`,
+        `context.maxWidth` / `context.maxHeight`). Busy → 503.
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, targetFormat]
+              properties:
+                file:
+                  type: string
+                  contentMediaType: application/octet-stream
+                targetFormat:
+                  type: string
+                  enum: [jpeg, png, svg]
+                save:
+                  type: string
+                  enum: ['true', 'false']
+                options:
+                  type: string
+                  description: JSON, see above.
+      responses:
+        '200':
+          description: The converted image.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Content-Disposition:
+              required: true
+              schema:
+                type: string
+                pattern: '^attachment; filename="converted\.(png|jpg)"$'
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            image/png:
+              schema:
+                type: string
+                contentMediaType: image/png
+            image/jpeg:
+              schema:
+                type: string
+                contentMediaType: image/jpeg
+        '400':
+          description: >-
+            Invalid fields or options, an empty or corrupt image, an unsafe SVG, a size over the
+            maximum, an unsupported direction, or a conversion that timed out.
+          x-error-codes:
+            - CONVERSION_NOT_SUPPORTED
+            - CONVERSION_TIMEOUT
+            - FILE_EMPTY
+            - FILE_PARSE_ERROR
+            - IMAGE_TOO_LARGE
+            - MALFORMED_REQUEST
+            - SVG_UNSAFE
+            - VALIDATION_FAILED
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOrValidationEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '413':
+          $ref: '#/components/responses/FileTooLarge'
+        '415':
+          $ref: '#/components/responses/FileTypeNotSupported'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/images/convert/formats:
+    get:
+      operationId: transformations_imageFormats
+      tags: [transformations]
+      summary: Supported image conversions
+      security:
+        - accessCookie: []
+      responses:
+        '200':
+          description: Every source format with its targets.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FormatPairs'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
   /api/admin/rbac/roles:
     get:
       operationId: rbac_listRoles
@@ -1931,6 +2057,7 @@ components:
         - FILE_PARSE_ERROR
         - FILE_TOO_LARGE
         - FILE_TYPE_NOT_SUPPORTED
+        - IMAGE_TOO_LARGE
         - INTERNAL_ERROR
         - MALFORMED_REQUEST
         - PAGINATION_CURSOR_INVALID
@@ -1953,6 +2080,7 @@ components:
         - SERVICE_UNAVAILABLE
         - STORAGE_UNAVAILABLE
         - STRUCTURE_TOO_COMPLEX
+        - SVG_UNSAFE
         - UNSUPPORTED_MEDIA_TYPE
         - USER_EMAIL_TAKEN
         - USER_NOT_ACTIVE
