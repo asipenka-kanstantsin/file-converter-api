@@ -1,4 +1,13 @@
-import { Controller, Get, Header, Param, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Header,
+  Param,
+  Query,
+  Res,
+  type StreamableFile,
+} from '@nestjs/common';
+import type { Response } from 'express';
 import { createZodDto, ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 
@@ -8,14 +17,35 @@ import {
   RequirePermission,
 } from '@/common/decorators';
 import { RateLimit } from '@/common/http/rate-limit';
+import { streamFile } from '@/common/http/streaming';
 import { uuidSchema } from '@/common/validation';
 
+import { DownloadsService, type SavedResult } from './downloads.service';
 import { historyQuerySchema } from './history';
 import { type HistoryPage, HistoryService } from './history.service';
 
 class HistoryQueryDto extends createZodDto(historyQuerySchema) {}
 
 class UserIdParamDto extends createZodDto(z.object({ userId: uuidSchema })) {}
+
+class ItemParamDto extends createZodDto(z.object({ itemId: uuidSchema })) {}
+
+class UserItemParamDto extends createZodDto(
+  z.object({ itemId: uuidSchema, userId: uuidSchema }),
+) {}
+
+// Notion 1.3.2: `Content-Disposition: attachment; filename="<original-name>"`, streamed.
+function attachment(result: SavedResult, response: Response): StreamableFile {
+  return streamFile(
+    result.body,
+    {
+      disposition: `attachment; filename="${result.filename}"`,
+      length: result.size,
+      type: result.mime,
+    },
+    response,
+  );
+}
 
 const timestamp = z.date().transform((date) => date.toISOString());
 
@@ -40,7 +70,10 @@ class HistoryPageDto extends createZodDto(
 
 @Controller('transformations/history')
 export class HistoryController {
-  constructor(private readonly history: HistoryService) {}
+  constructor(
+    private readonly downloads: DownloadsService,
+    private readonly history: HistoryService,
+  ) {}
 
   // 1.3.1: one's own history; the user id comes from the session.
   @Get()
@@ -53,15 +86,30 @@ export class HistoryController {
   ): Promise<HistoryPage> {
     return this.history.own(actor, query);
   }
+
+  // Notion "Сохранение результатов" 1.3.2: a saved result of one's own.
+  @Get(':itemId/download')
+  @RateLimit('profile')
+  @Header('Cache-Control', 'private, no-store')
+  async download(
+    @CurrentUser() actor: AuthUser,
+    @Param() { itemId }: ItemParamDto,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<StreamableFile> {
+    return attachment(await this.downloads.own(actor, itemId), response);
+  }
 }
 
 @Controller('admin/users/:userId/transformations/history')
-@RequirePermission('transformations', 'history')
 export class AdminHistoryController {
-  constructor(private readonly history: HistoryService) {}
+  constructor(
+    private readonly downloads: DownloadsService,
+    private readonly history: HistoryService,
+  ) {}
 
   // 1.3.2: one user's history, for transformations@history.
   @Get()
+  @RequirePermission('transformations', 'history')
   @RateLimit('profile')
   @Header('Cache-Control', 'no-store')
   @ZodSerializerDto(HistoryPageDto)
@@ -71,5 +119,21 @@ export class AdminHistoryController {
     @Query() query: HistoryQueryDto,
   ): Promise<HistoryPage> {
     return this.history.ofUser(actor, userId, query);
+  }
+
+  // Notion "Сохранение результатов" 1.3.3: any user's saved result, for transformations@download.
+  @Get(':itemId/download')
+  @RequirePermission('transformations', 'download')
+  @RateLimit('profile')
+  @Header('Cache-Control', 'private, no-store')
+  async download(
+    @CurrentUser() actor: AuthUser,
+    @Param() { itemId, userId }: UserItemParamDto,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<StreamableFile> {
+    return attachment(
+      await this.downloads.ofUser(actor, userId, itemId),
+      response,
+    );
   }
 }

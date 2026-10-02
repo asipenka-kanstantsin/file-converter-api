@@ -41,6 +41,10 @@ const historyRowsSchema = z.array(
   }),
 );
 
+const expiredRowsSchema = z.array(
+  z.object({ result_file_id: z.string().nullable() }),
+);
+
 @Injectable()
 export class TransformationsRepository {
   constructor(
@@ -136,6 +140,48 @@ export class TransformationsRepository {
               id: last.id,
             })
           : null,
+    };
+  }
+
+  // A history row as a download needs it (Notion "Сохранение результатов" 1.3.2/1.3.3).
+  findForDownload(id: string): Promise<null | {
+    expiresAt: Date;
+    resultFileId: null | string;
+    userId: string;
+  }> {
+    return this.txHost.tx.transformation.findUnique({
+      select: { expiresAt: true, resultFileId: true, userId: true },
+      where: { id },
+    });
+  }
+
+  // Cleanup (F5): one instance at a time cluster-wide, for the current transaction.
+  async tryLockCleanup(): Promise<boolean> {
+    const [row] = await this.txHost.tx.$queryRaw<{ locked: boolean }[]>`
+      SELECT pg_try_advisory_xact_lock(hashtext('transformations.cleanup')) AS locked`;
+    return row?.locked === true;
+  }
+
+  // Deletes up to `limit` expired rows (oldest first, rows in use skipped) and returns the
+  // files they held, for the caller to remove in the same transaction.
+  async deleteExpired(
+    limit: number,
+  ): Promise<{ count: number; fileIds: string[] }> {
+    const rows = expiredRowsSchema.parse(
+      await this.txHost.tx.$queryRaw`
+        DELETE FROM transformations
+         WHERE id IN (SELECT id FROM transformations
+                       WHERE expires_at <= now()
+                       ORDER BY expires_at
+                       LIMIT ${limit}
+                         FOR UPDATE SKIP LOCKED)
+        RETURNING result_file_id`,
+    );
+    return {
+      count: rows.length,
+      fileIds: rows.flatMap((row) =>
+        row.result_file_id === null ? [] : [row.result_file_id],
+      ),
     };
   }
 

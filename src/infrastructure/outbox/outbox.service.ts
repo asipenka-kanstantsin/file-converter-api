@@ -33,14 +33,18 @@ export class OutboxService {
   // Joins the caller's transaction: no commit, no message. A duplicate idempotency key is
   // ignored, so retried business operations never enqueue twice.
   async enqueue(message: OutboxMessageInput): Promise<void> {
+    await this.enqueueMany([message]);
+  }
+
+  // One insert for many messages (cleanup batches).
+  async enqueueMany(messages: readonly OutboxMessageInput[]): Promise<void> {
+    if (messages.length === 0) return;
     await this.txHost.tx.outboxMessage.createMany({
-      data: [
-        {
-          idempotencyKey: message.idempotencyKey ?? null,
-          payload: message.payload as Prisma.InputJsonObject,
-          type: message.type,
-        },
-      ],
+      data: messages.map((message) => ({
+        idempotencyKey: message.idempotencyKey ?? null,
+        payload: message.payload as Prisma.InputJsonObject,
+        type: message.type,
+      })),
       skipDuplicates: true,
     });
   }

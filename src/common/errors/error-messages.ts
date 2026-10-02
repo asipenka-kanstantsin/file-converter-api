@@ -58,6 +58,8 @@ export const ERROR_MESSAGES = {
   [ErrorCode.RBAC_SYSTEM_ENTITY]:
     'Built-in roles, permissions and grants cannot be changed this way.',
   [ErrorCode.REQUEST_REJECTED]: 'The request was rejected.',
+  [ErrorCode.RESULT_EXPIRED]: 'The saved result has expired and was removed.',
+  [ErrorCode.RESULT_NOT_FOUND]: 'No saved result for this history item.',
   [ErrorCode.ROUTE_NOT_FOUND]: 'The requested resource does not exist.',
   [ErrorCode.SERVICE_UNAVAILABLE]: 'The service is temporarily unavailable.',
   [ErrorCode.STORAGE_UNAVAILABLE]:
@@ -66,6 +68,7 @@ export const ERROR_MESSAGES = {
     'The file is nested too deeply or is too large to convert.',
   [ErrorCode.SVG_UNSAFE]:
     'The SVG contains scripts, external references or other active content.',
+  [ErrorCode.TRANSFORMATION_NOT_FOUND]: 'No such history item.',
   [ErrorCode.UNSUPPORTED_MEDIA_TYPE]:
     'The request content type or encoding is not supported.',
   [ErrorCode.USER_EMAIL_TAKEN]: 'This e-mail is already registered.',

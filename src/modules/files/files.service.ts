@@ -145,6 +145,25 @@ export class FilesService {
     });
   }
 
+  // remove() for many files in three statements (cleanup batches, F5).
+  async removeMany(fileIds: readonly string[]): Promise<void> {
+    if (fileIds.length === 0) return;
+    const files = await this.txHost.tx.file.findMany({
+      select: { key: true },
+      where: { id: { in: [...fileIds] } },
+    });
+    await this.txHost.tx.file.deleteMany({
+      where: { id: { in: [...fileIds] } },
+    });
+    await this.outbox.enqueueMany(
+      files.map(({ key }) => ({
+        idempotencyKey: `${STORAGE_DELETE}:${key}`,
+        payload: { key },
+        type: STORAGE_DELETE,
+      })),
+    );
+  }
+
   // Outbox handler; idempotent, a missing object is success.
   async deleteObject(payload: unknown): Promise<void> {
     const parsed = deletePayloadSchema.safeParse(payload);

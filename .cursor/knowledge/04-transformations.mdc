@@ -7,29 +7,25 @@ alwaysApply: false
 
 Project-specific: built from the Notion pages "Общие требования к трансформации файлов",
 "Трансформация текстовых форматов", "Трансформация изображений", "Просмотр истории
-трансформаций", "Сохранение результатов…", "Абстракции в ООП" and decisions F1–F5.
+трансформаций", "Сохранение результатов…", "Абстракции в ООП" and decisions F1–F13.
 
 ## Shape
 
 ```
 modules/transformations/
   transformations.module.ts
-  core/
-    file-transformer.ts          abstract FileTransformer (template method)
-    transformer.registry.ts      (source, target) → transformer; lists supported pairs
-    format-detector.ts           magic bytes / content sniffing → SourceFormat
-  text/
-    text.controller.ts           POST /api/convert, GET /api/convert/formats
-    parsers/  serializers/       csv, json, xml, yaml ↔ internal Document
-    text-conversion.worker.ts    piscina worker entry
-  images/
-    images.controller.ts         POST /api/images/convert, GET /api/images/convert/formats
-    png-to-jpeg.transformer.ts …
-  history/
-    history.controller.ts        GET /api/transformations/history[/:itemId/download]
-    history-admin.controller.ts  GET /api/admin/users/:userId/transformations/history[…]
-    history.repository.ts
-  transformations.service.ts     run → record history → optional save
+  converter.ts                   abstract Converter: formats, pairs, detect, convert, MIME, extension
+  transformations.service.ts     the pipeline: detect → limit → pair → convert → history → save
+  transformations.controller.ts  POST /api/convert, GET /api/convert/formats
+  images.controller.ts           POST /api/images/convert, GET /api/images/convert/formats
+  text/                          TextConverter on a piscina pool (text-conversion.worker.ts)
+  image/                         ImageConverter (sharp); SVG sanitised + rendered in a child process
+  history.ts                     history query schema, keyset cursor (F12)
+  history.controller.ts          GET …/transformations/history[/:itemId/download], Self + admin
+  history.service.ts             history pages + audit
+  downloads.service.ts           saved-result download checks + audit (F13)
+  history-cleanup.ts             hourly cron: expired rows + files (F5)
+  transformations.repository.ts
 ```
 
 ## The abstraction — open for extension, closed for modification

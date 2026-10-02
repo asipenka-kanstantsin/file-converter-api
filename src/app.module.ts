@@ -2,6 +2,7 @@ import { ClsPluginTransactional } from '@nestjs-cls/transactional';
 import { TransactionalAdapterPrisma } from '@nestjs-cls/transactional-adapter-prisma';
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ClsModule } from 'nestjs-cls';
 import { LoggerModule } from 'nestjs-pino';
@@ -55,6 +56,7 @@ import { TransformationsModule } from '@/modules/transformations';
     OpenApiModule,
     OutboxModule,
     RbacModule,
+    ScheduleModule.forRoot(),
     SettingsModule,
     StorageModule,
     ThrottlerModule.forRootAsync({

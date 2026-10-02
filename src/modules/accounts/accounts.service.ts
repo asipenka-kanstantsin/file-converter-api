@@ -233,10 +233,11 @@ export class AccountsService {
   async completeDeletion(userId: string): Promise<User> {
     await this.rbacAdmin.assertAnotherActiveAdmin(userId);
     await this.users.setPhoto(userId, null);
+    // History rows before files, the order the cleanup job locks them in (F5): no deadlock.
+    await this.transformations.forgetUser(userId);
     for (const fileId of await this.files.idsOwnedBy(userId)) {
       await this.files.remove(fileId);
     }
-    await this.transformations.forgetUser(userId);
     await this.rbacAdmin.removeAllRoles(userId);
     await this.auth.forgetUser(userId);
     return this.users.anonymise(userId);

@@ -1346,6 +1346,108 @@ paths:
         default:
           $ref: '#/components/responses/Default'
 
+  /api/transformations/history/{itemId}/download:
+    get:
+      operationId: transformations_downloadResult
+      tags: [transformations]
+      summary: Download a saved result of my own
+      description: |
+        The result saved with `save=true`, streamed through the API (never a storage URL), until
+        the retention period ends.
+      security:
+        - accessCookie: []
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          description: The history item.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The saved result, streamed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Content-Disposition:
+              required: true
+              schema:
+                type: string
+                pattern: '^attachment; filename="[\w.-]+"$'
+            Cache-Control:
+              schema:
+                type: string
+                const: private, no-store
+          content:
+            text/csv:
+              schema:
+                type: string
+            application/json:
+              schema: {}
+            application/xml:
+              schema:
+                type: string
+            application/yaml:
+              schema:
+                type: string
+            image/png:
+              schema:
+                type: string
+                contentMediaType: image/png
+            image/jpeg:
+              schema:
+                type: string
+                contentMediaType: image/jpeg
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: The item belongs to another user.
+          x-error-codes: [AUTH_FORBIDDEN]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: No such item, or no saved result (not saved, or missing in storage).
+          x-error-codes: [RESULT_NOT_FOUND, TRANSFORMATION_NOT_FOUND]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '410':
+          description: The retention period is over; the result has been or is about to be removed.
+          x-error-codes: [RESULT_EXPIRED]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: File storage is unavailable.
+          x-error-codes: [STORAGE_UNAVAILABLE]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        default:
+          $ref: '#/components/responses/Default'
+
   /api/admin/users/{userId}/transformations/history:
     get:
       operationId: admin_userHistory
@@ -1447,6 +1549,102 @@ paths:
           $ref: '#/components/responses/UserNotFound'
         '429':
           $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/admin/users/{userId}/transformations/history/{itemId}/download:
+    get:
+      operationId: admin_downloadUserResult
+      tags: [transformations]
+      summary: Download a user's saved result
+      description: |
+        A saved result from one user's history, streamed through the API, until the retention
+        period ends. An item of another user is not found.
+      x-permission: transformations@download
+      security:
+        - accessCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - name: itemId
+          in: path
+          required: true
+          description: The history item.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The saved result, streamed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Content-Disposition:
+              required: true
+              schema:
+                type: string
+                pattern: '^attachment; filename="[\w.-]+"$'
+            Cache-Control:
+              schema:
+                type: string
+                const: private, no-store
+          content:
+            text/csv:
+              schema:
+                type: string
+            application/json:
+              schema: {}
+            application/xml:
+              schema:
+                type: string
+            application/yaml:
+              schema:
+                type: string
+            image/png:
+              schema:
+                type: string
+                contentMediaType: image/png
+            image/jpeg:
+              schema:
+                type: string
+                contentMediaType: image/jpeg
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No such user, no such item of this user, or no saved result.
+          x-error-codes: [RESULT_NOT_FOUND, TRANSFORMATION_NOT_FOUND, USER_NOT_FOUND]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '410':
+          description: The retention period is over; the result has been or is about to be removed.
+          x-error-codes: [RESULT_EXPIRED]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: File storage is unavailable.
+          x-error-codes: [STORAGE_UNAVAILABLE]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         default:
           $ref: '#/components/responses/Default'
 
@@ -2278,11 +2476,14 @@ components:
         - RBAC_ROLE_NOT_FOUND
         - RBAC_SYSTEM_ENTITY
         - REQUEST_REJECTED
+        - RESULT_EXPIRED
+        - RESULT_NOT_FOUND
         - ROUTE_NOT_FOUND
         - SERVICE_UNAVAILABLE
         - STORAGE_UNAVAILABLE
         - STRUCTURE_TOO_COMPLEX
         - SVG_UNSAFE
+        - TRANSFORMATION_NOT_FOUND
         - UNSUPPORTED_MEDIA_TYPE
         - USER_EMAIL_TAKEN
         - USER_NOT_ACTIVE

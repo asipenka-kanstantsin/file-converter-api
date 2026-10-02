@@ -4,6 +4,8 @@ import { FilesModule } from '@/modules/files';
 import { SettingsModule } from '@/modules/settings';
 import { UsersModule } from '@/modules/users';
 
+import { DownloadsService } from './downloads.service';
+import { HistoryCleanup } from './history-cleanup';
 import {
   AdminHistoryController,
   HistoryController,
@@ -28,6 +30,8 @@ import { TransformationsService } from './transformations.service';
   exports: [TransformationsService],
   imports: [FilesModule, SettingsModule, UsersModule],
   providers: [
+    DownloadsService,
+    HistoryCleanup,
     HistoryService,
     ImageConverter,
     SvgRenderer,

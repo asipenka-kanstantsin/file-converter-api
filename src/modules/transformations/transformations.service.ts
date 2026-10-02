@@ -1,8 +1,8 @@
 import {
-  type BeforeApplicationShutdown,
   HttpStatus,
   Injectable,
   Logger,
+  type OnModuleDestroy,
 } from '@nestjs/common';
 
 import type { AuthUser } from '@/common/decorators';
@@ -54,7 +54,7 @@ function limitKey(format: string): NumberSettingKey {
 // content). The whole result exists before the response starts, so an error never yields a
 // partial file (Notion 1.6). With save=true the result is stored after the response (F9).
 @Injectable()
-export class TransformationsService implements BeforeApplicationShutdown {
+export class TransformationsService implements OnModuleDestroy {
   private readonly logger = new Logger(TransformationsService.name);
   private readonly saving = new Set<Promise<void>>();
 
@@ -169,8 +169,10 @@ export class TransformationsService implements BeforeApplicationShutdown {
     await Promise.all([...this.saving]);
   }
 
-  // SIGTERM: saves in flight finish first (before the worker pool and storage go down).
-  async beforeApplicationShutdown(): Promise<void> {
+  // SIGTERM: saves in flight finish first. onModuleDestroy, not beforeApplicationShutdown: Nest
+  // runs every onModuleDestroy first, and the database and storage modules (deeper) close after
+  // this one.
+  async onModuleDestroy(): Promise<void> {
     await this.idle();
   }
 

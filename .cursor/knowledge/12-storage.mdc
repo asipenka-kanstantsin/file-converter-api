@@ -108,8 +108,9 @@ enqueues `storage.delete`.
 - Deleting a user deletes their `files` rows in the same transaction and enqueues
   `storage.delete` per key in the outbox (`20-jobs.mdc`); the handler deletes the object and is
   idempotent (missing object = success).
-- Hourly cron (advisory-locked): history rows past retention and `files` past `expires_at` →
-  delete row, enqueue `storage.delete` (decision F5).
+- Hourly cron (`HistoryCleanup`, advisory-locked, batches with `SKIP LOCKED`): history rows past
+  `expires_at` and their result files → delete both rows in one transaction, enqueue
+  `storage.delete` (decision F5). A result file lives exactly as long as its row.
 
 ## Testing
 

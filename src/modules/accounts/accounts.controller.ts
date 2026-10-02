@@ -267,13 +267,14 @@ export class AccountsController {
   async photo(
     @CurrentUser() actor: AuthUser,
     @Param() { userId }: UserIdParamDto,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<StreamableFile> {
     const photo = await this.accounts.openPhoto(actor, userId);
-    return streamFile(photo.body, {
-      disposition: 'inline',
-      length: photo.size,
-      type: photo.contentType,
-    });
+    return streamFile(
+      photo.body,
+      { disposition: 'inline', length: photo.size, type: photo.contentType },
+      response,
+    );
   }
 
   @Delete(':userId/photo')
