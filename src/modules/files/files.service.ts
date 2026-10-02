@@ -122,6 +122,14 @@ export class FilesService {
     return { ...object, file };
   }
 
+  async idsOwnedBy(ownerId: string): Promise<string[]> {
+    const rows = await this.txHost.tx.file.findMany({
+      select: { id: true },
+      where: { ownerId },
+    });
+    return rows.map((row) => row.id);
+  }
+
   // In the caller's transaction: the row goes now, the object after commit.
   async remove(fileId: string): Promise<void> {
     const file = await this.txHost.tx.file.findUnique({

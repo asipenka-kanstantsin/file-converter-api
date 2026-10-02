@@ -1,4 +1,5 @@
-export type ChallengePurpose = 'email_change' | 'login' | 'registration';
+export type ChallengePurpose =
+  'account_deletion' | 'email_change' | 'login' | 'registration';
 
 export interface Challenge {
   attempts: number;

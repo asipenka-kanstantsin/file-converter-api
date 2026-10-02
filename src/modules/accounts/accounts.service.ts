@@ -5,7 +5,7 @@ import type { AuthUser } from '@/common/decorators';
 import { AppException, ErrorCode } from '@/common/errors';
 import { mapPrismaException } from '@/infrastructure/database';
 import type { StoredObject } from '@/infrastructure/storage';
-import { AuthService } from '@/modules/auth';
+import { AuthService, type OwnerConfirmation } from '@/modules/auth';
 import { FilesService } from '@/modules/files';
 import { RbacAdminService, RbacService } from '@/modules/rbac';
 import { type User, type UserChanges, UsersService } from '@/modules/users';
@@ -28,6 +28,10 @@ interface IssuedChallenge {
   challengeId: string;
   expiresAt: Date;
 }
+
+export type DeletionRequest =
+  | { challenge: IssuedChallenge; kind: 'confirmation_required' }
+  | { kind: 'deleted' };
 
 function forbidden(context?: Record<string, unknown>): never {
   throw new AppException(
@@ -127,6 +131,122 @@ export class AccountsService {
   ): Promise<Profile> {
     if (actor.id !== userId) forbidden();
     return toProfile(await this.auth.confirmEmailChange(userId, input), 'self');
+  }
+
+  // Notion "Удаление пользователя" 1.3.1. Self: only after an e-mailed confirmation (202 +
+  // challenge). Someone else: users@delete, at once (204, synchronous, H7). Refused before any
+  // lookup (P2); the audit log has actor, target, type and result, never deleted values (1.5).
+  async requestDeletion(
+    actor: AuthUser,
+    userId: string,
+    reason: string | undefined,
+  ): Promise<DeletionRequest> {
+    const type = actor.id === userId ? 'self' : 'admin';
+    // The reason is free text and may name people: only whether one was given is logged.
+    const audit = {
+      actorUserId: actor.id,
+      reasonGiven: reason !== undefined,
+      targetUserId: userId,
+      type,
+    };
+    try {
+      if (type === 'self') {
+        // Early answer for the last active admin (no lock outside a transaction); the confirmation
+        // checks again under the lock.
+        await this.rbacAdmin.assertAnotherActiveAdmin(userId);
+        const challenge = await this.auth.startAccountDeletion(userId);
+        this.logger.log(
+          {
+            ...audit,
+            challengeId: challenge.challengeId,
+            result: HttpStatus.ACCEPTED,
+          },
+          'account deletion requested',
+        );
+        return { challenge, kind: 'confirmation_required' };
+      }
+      if (!this.rbac.can(actor.roleIds, 'users', 'delete')) forbidden();
+      const deleted = await this.deleteNow(actor, userId);
+      this.logger.log(
+        { ...audit, result: HttpStatus.NO_CONTENT },
+        deleted ? 'account deleted' : 'account already deleted',
+      );
+      return { kind: 'deleted' };
+    } catch (error: unknown) {
+      this.logger.warn(
+        { ...audit, result: resultOf(error) },
+        'account deletion refused',
+      );
+      throw error;
+    }
+  }
+
+  // Success is audited by auditSelfDeletion, which every confirmation path reaches.
+  async confirmDeletion(
+    actor: AuthUser,
+    userId: string,
+    input: OwnerConfirmation,
+  ): Promise<void> {
+    try {
+      if (actor.id !== userId) forbidden();
+      await this.auth.confirmAccountDeletion(userId, input);
+    } catch (error: unknown) {
+      this.logger.warn(
+        {
+          actorUserId: actor.id,
+          result: resultOf(error),
+          targetUserId: userId,
+          type: 'self',
+        },
+        'account deletion refused',
+      );
+      throw error;
+    }
+  }
+
+  // The account_deletion handler's `completed`, after commit: the audit entry for a confirmed
+  // self-deletion, whichever endpoint (code or link) confirmed it (Notion 1.5).
+  auditSelfDeletion(userId: string): void {
+    this.logger.log(
+      {
+        actorUserId: userId,
+        result: HttpStatus.NO_CONTENT,
+        targetUserId: userId,
+        type: 'self',
+      },
+      'account deleted',
+    );
+  }
+
+  // Locks for a deletion, in the P8 order; the tombstone counts, so a repeat is a no-op. Also the
+  // `lock` step of the account_deletion confirmation handler.
+  async lockForDeletion(userId: string): Promise<null | User> {
+    await this.rbacAdmin.lockAdminRole();
+    return this.users.lockForDeletion(userId);
+  }
+
+  // Decision D1, in the caller's transaction after lockForDeletion: sessions end, the files go
+  // (rows now, objects through the outbox), roles and pending confirmations go, the row is
+  // anonymised. The last active admin is kept (R6).
+  async completeDeletion(userId: string): Promise<User> {
+    await this.rbacAdmin.assertAnotherActiveAdmin(userId);
+    await this.users.setPhoto(userId, null);
+    for (const fileId of await this.files.idsOwnedBy(userId)) {
+      await this.files.remove(fileId);
+    }
+    await this.rbacAdmin.removeAllRoles(userId);
+    await this.auth.forgetUser(userId);
+    return this.users.anonymise(userId);
+  }
+
+  // False when the account was already deleted: idempotent (Notion 1.6), nothing changes.
+  @Transactional()
+  private async deleteNow(actor: AuthUser, userId: string): Promise<boolean> {
+    const user = (await this.lockForDeletion(userId)) ?? notFound();
+    if (user.status === 'deleted') return false;
+    await this.assertMayTakeOver(actor, userId);
+    await this.completeDeletion(userId);
+    return true;
   }
 
   // Photo: Self or users@update to change it, Self or users@read to see it (P4).

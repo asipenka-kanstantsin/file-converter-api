@@ -9,6 +9,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { ChallengesRepository } from './challenges.repository';
 import { ChallengesService } from './challenges.service';
+import { ConfirmationHandlers } from './confirmation-handlers';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { LoginLockout } from './login-lockout';
 import { PasswordHasher } from './password-hasher';
@@ -19,13 +20,14 @@ import { SessionTokenService } from './session-tokens';
 @Module({
   controllers: [AuthController],
   // AppModule registers the guard globally, after throttling and CSRF (03-nestjs).
-  exports: [AuthService, JwtAuthGuard],
+  exports: [AuthService, ConfirmationHandlers, JwtAuthGuard, SessionCookies],
   // Secrets are passed per token (access vs refresh), so the module needs no default secret.
   imports: [JwtModule.register({}), MailModule, SettingsModule, UsersModule],
   providers: [
     AuthService,
     ChallengesRepository,
     ChallengesService,
+    ConfirmationHandlers,
     JwtAuthGuard,
     LoginLockout,
     PasswordHasher,

@@ -74,6 +74,26 @@ export class UsersRepository {
     });
   }
 
+  // Decision D1: the row stays as a tombstone (the admin list filters by `deleted`); every
+  // personal value goes. The address is freed for a new registration; sessions end (A2).
+  async anonymise(id: string): Promise<User> {
+    return this.txHost.tx.user.update({
+      data: {
+        deletedAt: new Date(),
+        displayName: null,
+        email: `deleted-${id}@deleted.invalid`,
+        lastLoginAt: null,
+        // Not a hash: nothing verifies against it.
+        passwordHash: '!',
+        photoFileId: null,
+        status: 'deleted',
+        tokenVersion: { increment: 1 },
+      },
+      select: userSelect,
+      where: { id },
+    });
+  }
+
   async setPhoto(id: string, fileId: null | string): Promise<void> {
     await this.txHost.tx.user.update({
       data: { photoFileId: fileId },
@@ -98,7 +118,8 @@ export class UsersRepository {
       select: { ...userSelect, passwordHash: true },
       where: { email },
     });
-    if (!row) return null;
+    // A tombstone (D1) is no account: the caller verifies against the dummy hash (A16).
+    if (!row || row.status === 'deleted') return null;
     const { passwordHash, ...user } = row;
     return { passwordHash, user };
   }
@@ -131,7 +152,7 @@ export class UsersRepository {
         await this.txHost.tx
           .$queryRaw`SELECT id FROM users WHERE id = ${id}::uuid FOR UPDATE`,
       );
-    return rows.length === 0 ? null : this.findById(id);
+    return rows.length === 0 ? null : this.findAnyById(id);
   }
 
   // FOR SHARE: the account cannot be deleted or change status until the transaction ends.
@@ -145,7 +166,13 @@ export class UsersRepository {
     return rows.length === 0 ? null : this.findById(id);
   }
 
+  // A deleted account is a tombstone (D1): to everything but deletion itself it does not exist.
   async findById(id: string): Promise<User | null> {
+    const user = await this.findAnyById(id);
+    return user?.status === 'deleted' ? null : user;
+  }
+
+  async findAnyById(id: string): Promise<User | null> {
     return this.txHost.tx.user.findUnique({
       select: userSelect,
       where: { id },

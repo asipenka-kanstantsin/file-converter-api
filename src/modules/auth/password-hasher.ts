@@ -21,7 +21,11 @@ export class PasswordHasher implements OnModuleInit {
     passwordHash: string | undefined,
     password: string,
   ): Promise<boolean> {
-    const matches = await verify(passwordHash ?? this.dummyHash, password);
+    // A value that is not an argon2 hash (an unusable marker) never matches; it must not 500.
+    const matches = await verify(
+      passwordHash ?? this.dummyHash,
+      password,
+    ).catch(() => false);
     return passwordHash !== undefined && matches;
   }
 }

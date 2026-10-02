@@ -14,6 +14,7 @@ import type {
   ChallengePurpose,
   IssuedChallenge,
 } from './challenges.types';
+import { ConfirmationHandlers } from './confirmation-handlers';
 import type { LoginInput } from './dto/login.dto';
 import type { RegisterInput } from './dto/register.dto';
 import { LoginLockout } from './login-lockout';
@@ -28,6 +29,9 @@ export type RegisterResult =
 export type LoginResult =
   | { challenge: IssuedChallenge; kind: 'confirmation_required'; user: User }
   | { kind: 'signed_in'; session: SessionTokens; user: User };
+
+export type OwnerConfirmation =
+  { challengeId: string; code: string } | { token: string };
 
 // A confirmed sign-in carries a session; a confirmed registration does not (decision A9).
 export interface ConfirmResult {
@@ -64,6 +68,7 @@ export class AuthService {
   constructor(
     private readonly challenges: ChallengesService,
     private readonly config: AppConfig,
+    private readonly handlers: ConfirmationHandlers,
     private readonly lockout: LoginLockout,
     private readonly mail: MailService,
     private readonly passwordHasher: PasswordHasher,
@@ -203,21 +208,50 @@ export class AuthService {
   // so a foreign challenge spends no attempt and reveals nothing (same 400 as unknown).
   async confirmEmailChange(
     userId: string,
-    input: { challengeId: string; code: string } | { token: string },
+    input: OwnerConfirmation,
+  ): Promise<User> {
+    return this.confirmByOwner('email_change', userId, input);
+  }
+
+  // Notion "Удаление пользователя" 1.3.1: Self-delete only after an e-mailed confirmation.
+  async startAccountDeletion(userId: string): Promise<IssuedChallenge> {
+    const issued = await this.issueAccountDeletion(userId);
+    this.logConfirmationSent(issued.challengeId, userId);
+    return issued;
+  }
+
+  async confirmAccountDeletion(
+    userId: string,
+    input: OwnerConfirmation,
+  ): Promise<User> {
+    return this.confirmByOwner('account_deletion', userId, input);
+  }
+
+  // Everything an admin deletion must also take with it (D1); in the caller's transaction.
+  async forgetUser(userId: string): Promise<void> {
+    const challengeIds = await this.challenges.deleteForUser(userId);
+    // Unsent mails still hold addresses: their keys name the challenge or the user.
+    await this.mail.discardUnsent([
+      ...challengeIds.map((id) => `auth.confirmation:${id}:`),
+      `account.email_changed:${userId}:`,
+    ]);
+  }
+
+  private async confirmByOwner(
+    purpose: ChallengePurpose,
+    userId: string,
+    input: OwnerConfirmation,
   ): Promise<User> {
     const fields: Record<string, string> =
       'token' in input
-        ? { method: 'link' }
-        : { challengeId: input.challengeId, method: 'code' };
+        ? { method: 'link', purpose }
+        : { challengeId: input.challengeId, method: 'code', purpose };
     const result = await this.confirm(fields, async () => {
       const challenge =
         'token' in input
           ? await this.challenges.verifyToken(input.token)
           : await this.challenges.peek(input.challengeId);
-      if (
-        challenge.purpose !== 'email_change' ||
-        challenge.user.id !== userId
-      ) {
+      if (challenge.purpose !== purpose || challenge.user.id !== userId) {
         invalidChallenge();
       }
       return 'token' in input
@@ -287,6 +321,7 @@ export class AuthService {
     try {
       const challenge = await verify();
       const user = await this.complete(challenge);
+      this.handlers.get(challenge.purpose)?.completed?.(user.id);
       const result: ConfirmResult =
         challenge.purpose === 'login'
           ? { session: await this.sessionTokens.issue(user), user }
@@ -315,11 +350,13 @@ export class AuthService {
 
   @Transactional()
   private async complete(challenge: Challenge): Promise<User> {
-    // An e-mail change locks the user row before the challenge row — the order an admin's PATCH
-    // uses (user, then voidPending) — and so a block committing meanwhile cannot slip past the
-    // version check.
-    const locked =
-      challenge.purpose === 'email_change'
+    const handler = this.handlers.get(challenge.purpose);
+    // Account changes lock the user row (and what else their handler needs) before the
+    // challenge row — the order an admin's PATCH or DELETE uses — so a block or a deletion
+    // committing meanwhile cannot slip past the version check.
+    const locked = handler
+      ? await handler.lock(challenge.user.id)
+      : challenge.purpose === 'email_change'
         ? await this.users.lockForUpdate(challenge.user.id)
         : undefined;
     await this.challenges.consume(challenge);
@@ -330,6 +367,11 @@ export class AuthService {
     if (user.status !== 'active') invalidChallenge();
     // Password reset, deletion or a block since it started void it (decision A2).
     if (challenge.tokenVersion !== user.tokenVersion) invalidChallenge();
+    if (handler) return handler.complete(user.id);
+    // An account change whose module did not register: never fall through to a sign-in.
+    if (challenge.purpose !== 'email_change' && challenge.purpose !== 'login') {
+      throw new Error(`no confirmation handler for ${challenge.purpose}`);
+    }
     if (challenge.purpose === 'email_change') {
       if (!challenge.newEmail) invalidChallenge();
       // Taken meanwhile → 409 USER_EMAIL_TAKEN, and the challenge stays unconsumed (rollback).
@@ -357,6 +399,12 @@ export class AuthService {
       throw new AppException(ErrorCode.USER_EMAIL_TAKEN, HttpStatus.CONFLICT);
     }
     return this.challenges.issue('email_change', user, newEmail);
+  }
+
+  @Transactional()
+  private async issueAccountDeletion(userId: string): Promise<IssuedChallenge> {
+    const user = await this.users.getActive(userId);
+    return this.challenges.issue('account_deletion', user);
   }
 
   // A notice to the address that was replaced: no secrets, only that it happened.

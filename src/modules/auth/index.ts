@@ -1,3 +1,8 @@
 export { AuthModule } from './auth.module';
-export { AuthService } from './auth.service';
+export { AuthService, type OwnerConfirmation } from './auth.service';
+export {
+  type ConfirmationHandler,
+  ConfirmationHandlers,
+} from './confirmation-handlers';
+export { SessionCookies } from './session-cookies';
 export { JwtAuthGuard } from './jwt-auth.guard';

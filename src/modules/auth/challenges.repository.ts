@@ -66,6 +66,16 @@ export class ChallengesRepository {
     });
   }
 
+  // Returns the ids, so the caller can find what was mailed for them.
+  async deleteForUser(userId: string): Promise<string[]> {
+    const rows = await this.txHost.tx.challenge.findMany({
+      select: { id: true },
+      where: { userId },
+    });
+    await this.txHost.tx.challenge.deleteMany({ where: { userId } });
+    return rows.map((row) => row.id);
+  }
+
   // A new sign-in voids the user's earlier pending sign-ins: one live code and link at a time.
   async voidPending(userId: string, purpose: ChallengePurpose): Promise<void> {
     await this.txHost.tx.challenge.updateMany({

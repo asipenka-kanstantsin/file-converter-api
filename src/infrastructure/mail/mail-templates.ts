@@ -7,6 +7,7 @@ export interface RenderedMail {
 }
 
 const CONFIRMATION_SUBJECTS = {
+  account_deletion: 'Confirm deleting your account',
   email_change: 'Confirm your new e-mail address',
   login: 'Confirm your sign-in',
   registration: 'Confirm your registration',
@@ -16,7 +17,12 @@ const confirmationVarsSchema = z.object({
   code: z.string().regex(/^\d{6}$/),
   expiresInMinutes: z.number().int().positive(),
   link: z.url(),
-  purpose: z.enum(['email_change', 'login', 'registration']),
+  purpose: z.enum([
+    'account_deletion',
+    'email_change',
+    'login',
+    'registration',
+  ]),
 });
 
 function escapeHtml(value: string): string {

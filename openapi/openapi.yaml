@@ -317,9 +317,9 @@ paths:
       tags: [auth]
       summary: Confirm a pending action with the e-mailed magic link
       description: |
-        Completes a registration, a sign-in (in the browser that started it) or an e-mail change
-        (only where the account's owner is signed in: the `access_token` cookie is read). Only a
-        sign-in sets session cookies.
+        Completes a registration, a sign-in (in the browser that started it), an e-mail change or
+        an account deletion (the last two only where the account's owner is signed in: the
+        `access_token` cookie is read). A sign-in sets session cookies; a deletion clears them.
       parameters:
         - name: login_challenge
           in: cookie
@@ -350,8 +350,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '409':
-          description: The new e-mail of an e-mail change was registered meanwhile.
-          x-error-codes: [USER_EMAIL_TAKEN]
+          description: >-
+            The new e-mail of an e-mail change was registered meanwhile, or a deletion would remove
+            the last active admin.
+          x-error-codes: [RBAC_LAST_ADMIN, USER_EMAIL_TAKEN]
           headers:
             X-Request-Id:
               $ref: '#/components/headers/RequestId'
@@ -612,6 +614,121 @@ paths:
           $ref: '#/components/responses/RateLimited'
         default:
           $ref: '#/components/responses/Default'
+    delete:
+      operationId: users_delete
+      tags: [users]
+      summary: Delete an account
+      description: |
+        Self: only after an e-mailed confirmation — answers 202 with a pending confirmation,
+        finished by `POST …/delete/confirm` (or the e-mailed link opened where signed in).
+        Another account: needs `users@delete` (and `rbac@manage` when it administers RBAC) and is
+        deleted at once, 204; deleting it again is a no-op 204.
+
+        Deletion anonymises the account: e-mail, name, photo and files, roles and pending
+        confirmations go, every session ends, the e-mail can be registered again. The last active
+        admin cannot be deleted.
+      x-permission: users@delete (not needed to request one's own deletion)
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeletionRequest'
+      responses:
+        '202':
+          description: Self-deletion pending; a code and a link went to the account's e-mail.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmationRequired'
+        '204':
+          description: Deleted (or already deleted).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '404':
+          $ref: '#/components/responses/UserNotFound'
+        '409':
+          description: The account is the last active admin.
+          x-error-codes: [RBAC_LAST_ADMIN]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/users/{userId}/delete/confirm:
+    post:
+      operationId: users_confirmDeletion
+      tags: [users]
+      summary: Confirm one's account deletion
+      description: |
+        With `{ challengeId, code }` or the link's `{ token }`. Self only; the account is deleted
+        and this browser's session cookies are cleared.
+      x-permission: none — Self only
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OwnerConfirmationRequest'
+      responses:
+        '204':
+          description: Deleted; session cookies cleared.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              $ref: '#/components/headers/ClearSessionCookies'
+        '400':
+          $ref: '#/components/responses/ConfirmationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '409':
+          description: The account became the last active admin meanwhile.
+          x-error-codes: [RBAC_LAST_ADMIN]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '423':
+          $ref: '#/components/responses/ChallengeLocked'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
 
   /api/users/{userId}/email-change:
     post:
@@ -685,7 +802,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/EmailChangeConfirmRequest'
+              $ref: '#/components/schemas/OwnerConfirmationRequest'
       responses:
         '200':
           description: E-mail changed; the updated profile.
@@ -1760,7 +1877,7 @@ components:
           format: email
         status:
           type: string
-          enum: [active, blocked, pending_verification]
+          enum: [active, blocked, deleted, pending_verification]
         createdAt:
           type: string
           format: date-time
@@ -2017,7 +2134,7 @@ components:
               type: [string, 'null']
             status:
               type: string
-              enum: [active, blocked, pending_verification]
+              enum: [active, blocked, deleted, pending_verification]
             createdAt:
               type: string
               format: date-time
@@ -2032,6 +2149,15 @@ components:
         profile:
           $ref: '#/components/schemas/Profile'
 
+    DeletionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: For audit and support.
     ProfilePatch:
       type: object
       additionalProperties: false
@@ -2052,7 +2178,7 @@ components:
       properties:
         newEmail:
           $ref: '#/components/schemas/Email'
-    EmailChangeConfirmRequest:
+    OwnerConfirmationRequest:
       oneOf:
         - type: object
           additionalProperties: false
@@ -2381,10 +2507,12 @@ components:
         X-Request-Id:
           $ref: '#/components/headers/RequestId'
         Set-Cookie:
-          description: Session cookies, only when a sign-in was confirmed.
+          description: >-
+            Session cookies set when a sign-in was confirmed, or cleared (empty, expired) when an
+            account deletion was.
           schema:
             type: string
-            pattern: '^(access|refresh)_token=[\w-]+\.[\w-]+\.[\w-]+;.*HttpOnly'
+            pattern: '^(access|refresh)_token=([\w-]+\.[\w-]+\.[\w-]+;.*HttpOnly|;.*Expires=Thu, 01 Jan 1970.*HttpOnly)'
       content:
         application/json:
           schema:

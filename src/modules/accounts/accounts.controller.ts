@@ -10,11 +10,13 @@ import {
   Patch,
   Post,
   Put,
+  Res,
   type StreamableFile,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
-import { createZodDto, ZodSerializerDto } from 'nestjs-zod';
+import type { Response } from 'express';
+import { createZodDto, ZodSerializerDto, ZodValidationPipe } from 'nestjs-zod';
 import { z } from 'zod';
 
 import { type AuthUser, CurrentUser } from '@/common/decorators';
@@ -22,6 +24,7 @@ import { RateLimit } from '@/common/http/rate-limit';
 import { streamFile } from '@/common/http/streaming';
 import { requireFile, SingleFileUpload } from '@/common/http/upload';
 import { emailSchema, uuidSchema } from '@/common/validation';
+import { type OwnerConfirmation, SessionCookies } from '@/modules/auth';
 import { userStatusSchema } from '@/modules/users';
 
 import { AccountsService } from './accounts.service';
@@ -67,8 +70,9 @@ class EmailChangeDto extends createZodDto(
   z.object({ newEmail: emailSchema }),
 ) {}
 
-// Variant A `{ challengeId, code }` or variant B `{ token }` (Notion 1.3.3), never both.
-const emailChangeConfirmSchema = z
+// Variant A `{ challengeId, code }` or variant B `{ token }` (Notion 1.3.3), never both; the
+// same shape confirms an account deletion.
+const ownerConfirmationSchema = z
   .strictObject({
     challengeId: uuidSchema.optional(),
     code: z
@@ -88,7 +92,23 @@ const emailChangeConfirmSchema = z
     { message: 'code_or_token' },
   );
 
-class EmailChangeConfirmDto extends createZodDto(emailChangeConfirmSchema) {}
+class OwnerConfirmationDto extends createZodDto(ownerConfirmationSchema) {}
+
+function toOwnerConfirmation(input: {
+  challengeId?: string;
+  code?: string;
+  token?: string;
+}): OwnerConfirmation {
+  return input.token === undefined
+    ? { challengeId: input.challengeId ?? '', code: input.code ?? '' }
+    : { token: input.token };
+}
+
+// Notion 1.3.1: an optional reason, for audit and support. The whole body is optional too (a
+// DELETE usually has none), so this schema is applied as the parameter's own pipe.
+const deletionRequestSchema = z
+  .strictObject({ reason: z.string().trim().min(1).max(500).optional() })
+  .optional();
 
 class ChallengeDto extends createZodDto(
   z.object({
@@ -100,7 +120,10 @@ class ChallengeDto extends createZodDto(
 
 @Controller('users')
 export class AccountsController {
-  constructor(private readonly accounts: AccountsService) {}
+  constructor(
+    private readonly accounts: AccountsService,
+    private readonly sessionCookies: SessionCookies,
+  ) {}
 
   // Notion "Просмотр данных пользователя" 1.3.1: Self or users@read; rate-limited (1.4).
   @Get(':userId')
@@ -159,15 +182,62 @@ export class AccountsController {
   async confirmEmailChange(
     @CurrentUser() actor: AuthUser,
     @Param() { userId }: UserIdParamDto,
-    @Body() { challengeId, code, token }: EmailChangeConfirmDto,
+    @Body() { challengeId, code, token }: OwnerConfirmationDto,
   ): Promise<{ profile: Profile }> {
-    const input =
-      token === undefined
-        ? { challengeId: challengeId ?? '', code: code ?? '' }
-        : { token };
+    const input = toOwnerConfirmation({ challengeId, code, token });
     return {
       profile: await this.accounts.confirmEmailChange(actor, userId, input),
     };
+  }
+
+  // Notion "Удаление пользователя" 1.3.1 (H7): Self → 202 and an e-mailed confirmation;
+  // another account with users@delete → 204, done.
+  // `mail` group: a Self request mails a fresh code each time (09-auth).
+  @Delete(':userId')
+  @RateLimit('mail')
+  async requestDeletion(
+    @CurrentUser() actor: AuthUser,
+    @Param() { userId }: UserIdParamDto,
+    @Body(new ZodValidationPipe(deletionRequestSchema))
+    body: z.infer<typeof deletionRequestSchema>,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<
+    | undefined
+    | { challengeId: string; expiresAt: string; requiresConfirmation: true }
+  > {
+    const result = await this.accounts.requestDeletion(
+      actor,
+      userId,
+      body?.reason,
+    );
+    if (result.kind === 'deleted') {
+      response.status(HttpStatus.NO_CONTENT);
+      return undefined;
+    }
+    response.status(HttpStatus.ACCEPTED);
+    return {
+      challengeId: result.challenge.challengeId,
+      expiresAt: result.challenge.expiresAt.toISOString(),
+      requiresConfirmation: true,
+    };
+  }
+
+  // The account is gone: this browser's session cookies go with it.
+  @Post(':userId/delete/confirm')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RateLimit('confirm')
+  async confirmDeletion(
+    @CurrentUser() actor: AuthUser,
+    @Param() { userId }: UserIdParamDto,
+    @Body() { challengeId, code, token }: OwnerConfirmationDto,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<void> {
+    await this.accounts.confirmDeletion(
+      actor,
+      userId,
+      toOwnerConfirmation({ challengeId, code, token }),
+    );
+    this.sessionCookies.clear(response);
   }
 
   // Decision P4: multipart field `file`, PNG or JPEG up to 5 MB.

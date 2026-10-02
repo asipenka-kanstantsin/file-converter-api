@@ -52,6 +52,11 @@ export class MailService {
     });
   }
 
+  // Account deletion (D1): queued mails carry the address in plain text until sent.
+  discardUnsent(keyPrefixes: readonly string[]): Promise<number> {
+    return this.outbox.discardUnsent(keyPrefixes);
+  }
+
   async deliver(payload: unknown): Promise<void> {
     const parsed = mailPayloadSchema.safeParse(payload);
     if (!parsed.success) throw new PermanentJobError('invalid mail payload');

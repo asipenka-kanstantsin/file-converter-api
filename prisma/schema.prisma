@@ -13,6 +13,7 @@ datasource db {
 enum UserStatus {
   active
   blocked
+  deleted
   pending_verification
 
   @@map("user_status")
@@ -29,6 +30,8 @@ model User {
   status       UserStatus
   tokenVersion Int         @default(0) @map("token_version")
   lastLoginAt  DateTime?   @map("last_login_at") @db.Timestamptz(3)
+  // Set when the account was deleted (anonymised in place, decision D1).
+  deletedAt    DateTime?   @map("deleted_at") @db.Timestamptz(3)
   createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
   challenges   Challenge[]
@@ -94,6 +97,7 @@ enum ChallengePurpose {
   registration
   login
   email_change
+  account_deletion
 
   @@map("challenge_purpose")
 }

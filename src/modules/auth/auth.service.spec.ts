@@ -9,6 +9,7 @@ import type { User, UsersService } from '@/modules/users';
 import { AuthService } from './auth.service';
 import type { ChallengesService } from './challenges.service';
 import type { Challenge } from './challenges.types';
+import { ConfirmationHandlers } from './confirmation-handlers';
 import { LoginLockout } from './login-lockout';
 import type { PasswordHasher } from './password-hasher';
 import type { ResolvedSession, SessionResolver } from './session-resolver';
@@ -96,6 +97,7 @@ function setup(options: {
   const service = new AuthService(
     challenges as unknown as ChallengesService,
     config,
+    new ConfirmationHandlers(),
     lockout,
     {
       enqueue: jest.fn().mockResolvedValue(undefined),

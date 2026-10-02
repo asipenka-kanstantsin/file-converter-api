@@ -345,15 +345,20 @@ export class RbacAdminService {
     return this.repository.roleIdsOf(userId);
   }
 
-  // In the caller's transaction, before an account stops being an active admin (blocked, deleted)
-  // and before the caller locks that user: admin role first, as in setUserRoles, so the lock
-  // order is the same everywhere (R6).
+  // Account deletion (D1), after assertAnotherActiveAdmin under the admin-role lock. No cache
+  // reload: user roles are read per request.
+  async removeAllRoles(userId: string): Promise<void> {
+    await this.repository.replaceUserRoles(userId, []);
+  }
+
   // The first lock of any change to who is an active admin (P8 lock order).
   async lockAdminRole(): Promise<void> {
     const admin = await this.requireAdminRole();
     await this.repository.lockRole(admin.id);
   }
 
+  // In the caller's transaction, after lockAdminRole (P8), before an account stops being an
+  // active admin (blocked, deleted): the last active one is kept (R6).
   async assertAnotherActiveAdmin(userId: string): Promise<void> {
     const admin = await this.requireAdminRole();
     await this.repository.lockRole(admin.id);

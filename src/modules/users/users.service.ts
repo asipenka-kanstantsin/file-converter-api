@@ -71,8 +71,19 @@ export class UsersService {
     return !(await this.usersRepository.existsByEmail(email));
   }
 
-  lockForUpdate(id: string): Promise<User | null> {
+  // Null for a missing or deleted account (D1).
+  async lockForUpdate(id: string): Promise<User | null> {
+    const user = await this.usersRepository.lockForUpdate(id);
+    return user?.status === 'deleted' ? null : user;
+  }
+
+  // Deletion only: the tombstone too, so a repeated deletion is a no-op, not a 404.
+  lockForDeletion(id: string): Promise<User | null> {
     return this.usersRepository.lockForUpdate(id);
+  }
+
+  anonymise(id: string): Promise<User> {
+    return this.usersRepository.anonymise(id);
   }
 
   setPhoto(id: string, fileId: null | string): Promise<void> {

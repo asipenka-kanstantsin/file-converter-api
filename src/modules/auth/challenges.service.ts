@@ -22,6 +22,7 @@ import type {
 // Started by a signed-in or signing-in user: bound to token_version (A2) and voided by a newer
 // request of the same purpose, so only one code and link is live at a time.
 const SESSION_BOUND: ReadonlySet<ChallengePurpose> = new Set([
+  'account_deletion',
   'email_change',
   'login',
 ]);
@@ -121,6 +122,10 @@ export class ChallengesService {
   // wrong purpose or owner before a code is compared (no oracle, no attempt spent).
   async peek(challengeId: string): Promise<Challenge> {
     return this.findPending(challengeId);
+  }
+
+  deleteForUser(userId: string): Promise<string[]> {
+    return this.challengesRepository.deleteForUser(userId);
   }
 
   async voidPending(userId: string, purpose: ChallengePurpose): Promise<void> {

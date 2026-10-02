@@ -15,6 +15,21 @@ export class OutboxService {
     >,
   ) {}
 
+  // Unsent messages whose idempotency key starts with one of the prefixes are dropped, in the
+  // caller's transaction (account deletion, D1). Sent and dead rows already hold no payload.
+  async discardUnsent(keyPrefixes: readonly string[]): Promise<number> {
+    if (keyPrefixes.length === 0) return 0;
+    const { count } = await this.txHost.tx.outboxMessage.deleteMany({
+      where: {
+        OR: keyPrefixes.map((prefix) => ({
+          idempotencyKey: { startsWith: prefix },
+        })),
+        status: { in: ['pending', 'processing'] },
+      },
+    });
+    return count;
+  }
+
   // Joins the caller's transaction: no commit, no message. A duplicate idempotency key is
   // ignored, so retried business operations never enqueue twice.
   async enqueue(message: OutboxMessageInput): Promise<void> {

@@ -236,6 +236,8 @@ export class AuthController {
       this.sessionCookies.set(response, result.session);
       this.sessionCookies.clearLoginBinding(response);
     }
+    // A deletion confirmed by link: the session in this browser ended with the account.
+    if (result.user.status === 'deleted') this.sessionCookies.clear(response);
     return { user: toUserResponse(result.user) };
   }
 }

@@ -1,6 +1,6 @@
-import { Module } from '@nestjs/common';
+import { Module, type OnModuleInit } from '@nestjs/common';
 
-import { AuthModule } from '@/modules/auth';
+import { AuthModule, ConfirmationHandlers } from '@/modules/auth';
 import { FilesModule } from '@/modules/files';
 import { RbacModule } from '@/modules/rbac';
 import { UsersModule } from '@/modules/users';
@@ -15,4 +15,19 @@ import { AccountsService } from './accounts.service';
   imports: [AuthModule, FilesModule, RbacModule, UsersModule],
   providers: [AccountsService],
 })
-export class AccountsModule {}
+export class AccountsModule implements OnModuleInit {
+  constructor(
+    private readonly accounts: AccountsService,
+    private readonly handlers: ConfirmationHandlers,
+  ) {}
+
+  onModuleInit(): void {
+    this.handlers.register('account_deletion', {
+      complete: (userId) => this.accounts.completeDeletion(userId),
+      completed: (userId) => {
+        this.accounts.auditSelfDeletion(userId);
+      },
+      lock: (userId) => this.accounts.lockForDeletion(userId),
+    });
+  }
+}

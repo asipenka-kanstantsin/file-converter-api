@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const USER_STATUSES = [
   'active',
   'blocked',
+  'deleted',
   'pending_verification',
 ] as const;
 export const userStatusSchema = z.enum(USER_STATUSES);
