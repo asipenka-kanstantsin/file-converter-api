@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'node:http';
 
 import type { Params } from 'nestjs-pino';
 
+import type { AuthenticatedRequest } from '@/common/decorators';
 import type { AppConfig } from '@/config';
 
 export const REDACTED_PATHS = [
@@ -40,6 +41,13 @@ export function serializeRequest(
   return { id: request.id, method: request.method, path: pathOf(request.url) };
 }
 
+// pino-http evaluates this again when the response finishes, after the access guard ran: the
+// request line then names who made it (Notion "Авторизация" 1.5).
+export function requestUser(request: IncomingMessage): Record<string, string> {
+  const { user } = request as Partial<AuthenticatedRequest>;
+  return user ? { userId: user.id } : {};
+}
+
 export function buildLoggerOptions(config: AppConfig): Params {
   return {
     pinoHttp: {
@@ -47,6 +55,7 @@ export function buildLoggerOptions(config: AppConfig): Params {
         ignore: (request: IncomingMessage) =>
           UNLOGGED_PATHS.has(pathOf(request.url)),
       },
+      customProps: requestUser,
       genReqId: (request: IncomingMessage & { id?: unknown }) =>
         typeof request.id === 'string' ? request.id : 'unknown',
       level: config.log.level,

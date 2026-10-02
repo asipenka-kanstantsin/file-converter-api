@@ -12,6 +12,8 @@ export const REFRESH_COOKIE = 'refresh_token';
 export const LOGIN_BINDING_COOKIE = 'login_challenge';
 
 const CONFIRM_PATH = '/api/auth/confirm';
+const ACCESS_PATH = '/api';
+const REFRESH_PATH = '/api/auth/refresh';
 
 // One place that writes the auth cookies (09-auth → Cookies): HttpOnly, SameSite=Lax, Max-Age equal
 // to the token TTL, the refresh cookie scoped to the refresh endpoint only.
@@ -26,6 +28,12 @@ export class SessionCookies {
     });
   }
 
+  // Clearing must repeat the attributes the cookie was set with, or the browser keeps it.
+  clear(response: Response): void {
+    response.clearCookie(ACCESS_COOKIE, this.base(ACCESS_PATH));
+    response.clearCookie(REFRESH_COOKIE, this.base(REFRESH_PATH));
+  }
+
   clearLoginBinding(response: Response): void {
     response.clearCookie(LOGIN_BINDING_COOKIE, this.base(CONFIRM_PATH));
   }
@@ -35,11 +43,11 @@ export class SessionCookies {
     // A response that sets a session must never be stored by a cache (19-security).
     response.setHeader('Cache-Control', 'no-store');
     response.cookie(ACCESS_COOKIE, tokens.accessToken, {
-      ...this.base('/api'),
+      ...this.base(ACCESS_PATH),
       maxAge: auth.accessTtlSeconds * 1000,
     });
     response.cookie(REFRESH_COOKIE, tokens.refreshToken, {
-      ...this.base('/api/auth/refresh'),
+      ...this.base(REFRESH_PATH),
       maxAge: auth.refreshTtlSeconds * 1000,
     });
   }

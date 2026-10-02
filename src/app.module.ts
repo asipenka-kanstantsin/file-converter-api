@@ -20,7 +20,7 @@ import {
 } from '@/infrastructure/database';
 import { MailModule } from '@/infrastructure/mail';
 import { OutboxModule } from '@/infrastructure/outbox';
-import { AuthModule } from '@/modules/auth';
+import { AuthModule, JwtAuthGuard } from '@/modules/auth';
 import { HealthModule } from '@/modules/health';
 import { OpenApiModule } from '@/modules/openapi';
 
@@ -60,9 +60,10 @@ import { OpenApiModule } from '@/modules/openapi';
     { provide: APP_INTERCEPTOR, useClass: ZodSerializerInterceptor },
     { provide: EXCEPTION_MAPPERS, useValue: [mapPrismaException] },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
-    // Order matters: throttling first, then CSRF (03-nestjs).
+    // Order matters: throttling first, then CSRF, then the access token (03-nestjs).
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: CsrfGuard },
+    { provide: APP_GUARD, useExisting: JwtAuthGuard },
   ],
 })
 export class AppModule {}

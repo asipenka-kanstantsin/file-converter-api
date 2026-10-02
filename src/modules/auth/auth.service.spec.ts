@@ -10,6 +10,7 @@ import type { ChallengesService } from './challenges.service';
 import type { Challenge } from './challenges.types';
 import { LoginLockout } from './login-lockout';
 import type { PasswordHasher } from './password-hasher';
+import type { ResolvedSession, SessionResolver } from './session-resolver';
 import type { SessionTokenService } from './session-tokens';
 
 jest.mock('@nestjs-cls/transactional', () => ({
@@ -50,6 +51,7 @@ function setup(options: {
   credentials?: { passwordHash: string; user: User } | null;
   loginConfirmation?: boolean;
   passwordValid?: boolean;
+  resolved?: ResolvedSession;
   verified?: Challenge;
   verify?: () => Promise<boolean>;
 }): {
@@ -86,6 +88,10 @@ function setup(options: {
         options.verify ??
         (() => Promise.resolve(options.passwordValid ?? false)),
     } as unknown as PasswordHasher,
+    {
+      resolve: () =>
+        Promise.resolve(options.resolved ?? { failure: 'missing', ok: false }),
+    } as unknown as SessionResolver,
     { issue: () => Promise.resolve(session) } as unknown as SessionTokenService,
     {
       isEnabled: () => Promise.resolve(options.loginConfirmation ?? false),
@@ -204,6 +210,34 @@ describe('AuthService', () => {
         code: ErrorCode.RATE_LIMITED,
       });
       expect(users.findCredentialsByEmail).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('refresh', () => {
+    it('issues a new pair for a resolved session', async () => {
+      const { service } = setup({ resolved: { ok: true, user } });
+
+      await expect(service.refresh('r')).resolves.toEqual(session);
+      expect(log).toHaveBeenCalledWith(
+        { userId: user.id },
+        'session refreshed',
+      );
+    });
+
+    it('refuses with AUTH_REFRESH_INVALID and logs the reason, not the token', async () => {
+      const { service } = setup({
+        resolved: { failure: 'revoked', ok: false, userId: user.id },
+      });
+
+      await expect(service.refresh('secret.jwt.value')).rejects.toMatchObject({
+        code: ErrorCode.AUTH_REFRESH_INVALID,
+        status: 401,
+      });
+      expect(warn).toHaveBeenCalledWith(
+        { reason: 'revoked', userId: user.id },
+        'refresh failed',
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('secret.jwt.value');
     });
   });
 

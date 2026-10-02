@@ -2,9 +2,12 @@ import { Controller, Get } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ZodSerializerDto } from 'nestjs-zod';
 
+import { Public } from '@/common/decorators';
+
 import { type HealthReport, HealthReportDto } from './dto/health-report.dto';
 import { HealthService } from './health.service';
 
+@Public()
 @Controller('health')
 @SkipThrottle()
 export class HealthController {

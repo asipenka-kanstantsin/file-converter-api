@@ -5,6 +5,7 @@ import { type AppConfig, parseAppConfig } from '@/config';
 import {
   buildLoggerOptions,
   REDACTED_PATHS,
+  requestUser,
   serializeRequest,
 } from './logger.options';
 
@@ -87,5 +88,12 @@ describe('buildLoggerOptions', () => {
     });
     expect(JSON.stringify(serialized)).not.toContain('SECRET');
     expect(serializeRequest({}).path).toBe('');
+  });
+
+  it('names the signed-in user on the request line, once the guard has run', () => {
+    expect(requestUser({} as IncomingMessage)).toEqual({});
+    expect(
+      requestUser({ user: { id: 'u1' } } as unknown as IncomingMessage),
+    ).toEqual({ userId: 'u1' });
   });
 });

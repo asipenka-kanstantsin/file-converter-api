@@ -34,13 +34,14 @@ Lifetimes and secrets are config (`AUTH_ACCESS_*`, `AUTH_REFRESH_*`, `AUTH_JWT_A
 
 | Cookie | Value | HttpOnly | Secure | SameSite | Path | Max-Age |
 | --- | --- | --- | --- | --- | --- | --- |
-| `access_token` | access JWT | yes | `config.auth.cookieSecure` | Lax | `/` | access TTL |
+| `access_token` | access JWT | yes | `config.auth.cookieSecure` | Lax | `/api` | access TTL |
 | `refresh_token` | refresh JWT | yes | `config.auth.cookieSecure` | Lax | `/api/auth/refresh` | refresh TTL |
-| `csrf_token` | random 32 bytes | **no** | `config.auth.cookieSecure` | Lax | `/` | refresh TTL |
+| `csrf_token` | random 32 bytes | **no** | `config.auth.cookieSecure` | Lax | `/` | session |
+| `login_challenge` | pending sign-in id | yes | `config.auth.cookieSecure` | Lax | `/api/auth/confirm` | 10 min (A17) |
 
 - Cookie Max-Age equals the token TTL (Notion: "TTL cookie синхронизирован с exp").
 - The refresh cookie is path-scoped so it reaches only the refresh endpoint.
-- Writing/clearing cookies lives in one `AuthCookies` helper; clearing uses the same attributes.
+- Writing/clearing cookies lives in one `SessionCookies` helper; clearing uses the same attributes.
 - Tokens are never in response bodies, URLs or logs.
 
 ## E-mail confirmation challenges
@@ -80,9 +81,9 @@ One `challenges` table serves every confirmable action (decision A4):
 | `POST /confirm` | public | `{ challengeId, code }` → completes the challenge's action; a `login` challenge also sets the session cookies, a `registration` one does not |
 | `GET /confirm?token=` | public | magic-link variant of `POST /confirm`; a sign-in link needs the `login_challenge` cookie of the browser that started it (A17) |
 | `POST /confirm/resend` | public | `{ challengeId }` → 202 |
-| `POST /refresh` | public (refresh cookie) | validates the refresh JWT, issues a new pair, 204 |
-| `POST /logout` | authenticated | clears cookies, 204 |
-| `GET /api/me` | authenticated | 200 current user |
+| `POST /refresh` | public (refresh cookie) | validates the refresh JWT, issues a new pair, 204 (A21) |
+| `POST /logout` | public (works with an expired access token) | clears the cookies, 204 (A21) |
+| `GET /api/me` | access token | 200 current user (A20) |
 | `POST /password/forgot` | public | 202 always; mail with a `password_reset` challenge |
 | `POST /password/reset` | public | `{ challengeId, code \| token, password }` → sets password, increments `token_version`, 204 |
 
@@ -98,8 +99,8 @@ refresh нет").
 
 - `CsrfGuard` (global) runs on every POST/PUT/PATCH/DELETE: `X-CSRF-Token` must equal the
   `csrf_token` cookie (constant-time compare), else 403 `CSRF_INVALID`.
-- It applies to public endpoints too (login CSRF). The client calls `GET /api/auth/csrf` first;
-  login, confirm and refresh re-issue it.
+- It applies to public endpoints too (login CSRF). The client calls `GET /api/auth/csrf` once;
+  the cookie lives for the browser session.
 - `GET /api/auth/confirm?token=` is a GET and is therefore safe from CSRF by design; it must stay
   idempotent per token (second use → 400 `AUTH_CHALLENGE_INVALID`).
 
@@ -107,10 +108,14 @@ refresh нет").
 
 Global order: `ThrottlerGuard → CsrfGuard → JwtAuthGuard → PermissionGuard` (`03-nestjs`).
 
-- `JwtAuthGuard` reads `access_token` from the cookie, verifies it with the access secret, loads
-  the user (one indexed query), checks `status = active` and `ver`, puts
-  `AuthUser { id, roleIds }` on the request. Skipped by `@Public()`. Failure → 401
-  `AUTH_UNAUTHENTICATED`.
+- `JwtAuthGuard` (global, deny by default — A19) reads `access_token` from the cookie;
+  `SessionResolver` verifies it with the access secret (HS256 only, `iss`, `aud`, `typ`), loads
+  the user (one indexed query), checks `status = active` and `ver`; the guard puts
+  `AuthUser { id }` on the request (FC-4 adds roles). Skipped by `@Public()` (controller or
+  handler). Every failure → 401 `AUTH_UNAUTHENTICATED`; the reason (`missing`, `invalid`,
+  `expired`, `wrong_type`, `user_not_found`, `inactive`, `revoked`) is logged, the token never.
+- The request log line carries `userId` once the guard has run (`requestUser` in
+  `logger.options.ts`).
 - `PermissionGuard` checks `@RequirePermission(permission, action)` metadata against the RBAC
   cache for the user's roles; no metadata = any authenticated user. Failure → 403
   `AUTH_FORBIDDEN`.
@@ -159,7 +164,6 @@ if (!isSelf && !this.rbac.can(actor, "users", "read")) {
 | login — `LoginLockout`, failures only | 5 failures / min, then blocked 15 min (A15) | IP + normalised email |
 | register, password/forgot, confirm/resend — `@RateLimit('mail')` | 3 / min (`THROTTLE_MAIL_LIMIT`) | IP |
 | confirm (code and link), password/reset — `@RateLimit('confirm')` | 10 / min (`THROTTLE_CONFIRM_LIMIT`) | IP |
-| refresh | 30 / min | IP |
 | everything else | 100 / min | user id or IP |
 
 429 → `RATE_LIMITED` with `context.retryAfter`. `trust proxy` must be set behind a proxy.

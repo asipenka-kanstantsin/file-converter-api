@@ -17,6 +17,7 @@ import type { LoginInput } from './dto/login.dto';
 import type { RegisterInput } from './dto/register.dto';
 import { LoginLockout } from './login-lockout';
 import { PasswordHasher } from './password-hasher';
+import { SessionResolver } from './session-resolver';
 import { type SessionTokens, SessionTokenService } from './session-tokens';
 
 export type RegisterResult =
@@ -50,10 +51,31 @@ export class AuthService {
     private readonly config: AppConfig,
     private readonly lockout: LoginLockout,
     private readonly passwordHasher: PasswordHasher,
+    private readonly sessions: SessionResolver,
     private readonly sessionTokens: SessionTokenService,
     private readonly settings: SettingsService,
     private readonly users: UsersService,
   ) {}
+
+  // Notion "Авторизация" 1.3.2: a valid refresh token of an active account → a new pair
+  // (rotation). Nothing is stored, so there is no state of the old token to check or revoke.
+  async refresh(refreshToken: string | undefined): Promise<SessionTokens> {
+    const session = await this.sessions.resolve('refresh', refreshToken);
+    if (!session.ok) {
+      const level = session.failure === 'missing' ? 'debug' : 'warn';
+      this.logger[level](
+        { reason: session.failure, userId: session.userId },
+        'refresh failed',
+      );
+      throw new AppException(
+        ErrorCode.AUTH_REFRESH_INVALID,
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+    const tokens = await this.sessionTokens.issue(session.user);
+    this.logger.log({ userId: session.user.id }, 'session refreshed');
+    return tokens;
+  }
 
   // Notion "Регистрация" 1.3.1: confirmation off → active account; on → pending account plus an
   // e-mailed code and link (decision A5).

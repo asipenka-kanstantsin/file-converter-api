@@ -15,6 +15,9 @@ export const ERROR_MESSAGES = {
     'Open the sign-in link in the browser where you started signing in, or enter the code.',
   [ErrorCode.AUTH_CODE_INVALID]: 'The code is incorrect.',
   [ErrorCode.AUTH_INVALID_CREDENTIALS]: 'The e-mail or password is incorrect.',
+  [ErrorCode.AUTH_REFRESH_INVALID]:
+    'Your session has ended. Please sign in again.',
+  [ErrorCode.AUTH_UNAUTHENTICATED]: 'Sign in to continue.',
   [ErrorCode.CONFLICT]: 'The request conflicts with the current state.',
   [ErrorCode.CSRF_INVALID]: 'The request is missing a valid CSRF token.',
   [ErrorCode.INTERNAL_ERROR]: 'Something went wrong. Please try again later.',

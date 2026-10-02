@@ -36,6 +36,10 @@ export class UsersService {
     return user;
   }
 
+  findById(id: string): Promise<User | null> {
+    return this.usersRepository.findById(id);
+  }
+
   findCredentialsByEmail(email: string): Promise<UserCredentials | null> {
     return this.usersRepository.findCredentialsByEmail(email);
   }

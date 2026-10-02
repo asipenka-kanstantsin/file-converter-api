@@ -1,8 +1,11 @@
 import { Controller, Get, Header, Inject } from '@nestjs/common';
 
+import { Public } from '@/common/decorators';
+
 import type { OpenApiDocument } from './openapi-document';
 import { OPENAPI_DOCUMENT } from './openapi.constants';
 
+@Public()
 @Controller()
 export class OpenApiController {
   constructor(

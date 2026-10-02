@@ -17,6 +17,10 @@ info:
     - Every path is under `/api`, except the monitoring endpoints `/health`, `/health/live` and
       `/health/ready`.
     - A path that does not exist answers `404` with `ErrorEnvelope` and code `ROUTE_NOT_FOUND`.
+    - Operations with the `accessCookie` security requirement need a valid `access_token` cookie
+      and answer `401 AUTH_UNAUTHENTICATED` without one. When it expires, call
+      `POST /api/auth/refresh` and repeat the request; a `401 AUTH_REFRESH_INVALID` there means
+      signing in again.
     - Endpoints with a stricter rate-limit group also send `X-RateLimit-*-<group>` and
       `Retry-After-<group>` headers; every `429` carries plain `Retry-After`.
   license:
@@ -29,7 +33,9 @@ tags:
   - name: system
     description: Health checks and the API contract itself.
   - name: auth
-    description: Registration, sign-in, e-mail confirmation (OTP or magic link) and CSRF.
+    description: Registration, sign-in, e-mail confirmation (OTP or magic link), session and CSRF.
+  - name: users
+    description: User accounts.
 security: []
 
 paths:
@@ -387,8 +393,116 @@ paths:
         default:
           $ref: '#/components/responses/Default'
 
+  /api/auth/refresh:
+    post:
+      operationId: auth_refresh
+      tags: [auth]
+      summary: Exchange the refresh token for a new session
+      description: |
+        Reads the `refresh_token` cookie (sent only to this path) and, when it is valid and the
+        account is still active, sets a **new pair** of `access_token` and `refresh_token`
+        (rotation). Nothing about refresh tokens is stored on the server, so an earlier refresh
+        token stays usable until it expires.
+
+        Any failure answers 401 `AUTH_REFRESH_INVALID` and clears both session cookies: the user
+        must sign in again.
+      security:
+        - csrfHeader: []
+          csrfCookie: []
+          refreshCookie: []
+      responses:
+        '204':
+          description: New session cookies set.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              $ref: '#/components/headers/SetSessionCookies'
+        '401':
+          description: >-
+            The refresh token is missing, invalid or expired, or the account was deleted,
+            unconfirmed or had its sessions revoked.
+          x-error-codes: [AUTH_REFRESH_INVALID]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              $ref: '#/components/headers/ClearSessionCookies'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/auth/logout:
+    post:
+      operationId: auth_logout
+      tags: [auth]
+      summary: Sign out in this browser
+      description: |
+        Clears the session cookies (and a pending sign-in binding). Works with an expired access
+        token too. Tokens are not stored on the server, so a refresh token copied elsewhere stays
+        valid until it expires (Notion "Авторизация" 1.4).
+      security:
+        - csrfHeader: []
+          csrfCookie: []
+      responses:
+        '204':
+          description: Cookies cleared.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Set-Cookie:
+              $ref: '#/components/headers/ClearSessionCookies'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/me:
+    get:
+      operationId: users_me
+      tags: [users]
+      summary: The signed-in user
+      description: Lets the client find out who is signed in, e.g. after a page reload.
+      security:
+        - accessCookie: []
+      responses:
+        '200':
+          description: The current user.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
 components:
   securitySchemes:
+    accessCookie:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: Access JWT (15 min), set by sign-in, confirmation and refresh.
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: refresh_token
+      description: Refresh JWT (30 days), sent by the browser only to `POST /api/auth/refresh`.
     csrfCookie:
       type: apiKey
       in: cookie
@@ -410,6 +524,14 @@ components:
       schema:
         type: string
         pattern: '^(access|refresh)_token=[\w-]+\.[\w-]+\.[\w-]+;.*HttpOnly'
+    ClearSessionCookies:
+      description: >-
+        Expires `access_token` (`Path=/api`) and `refresh_token` (`Path=/api/auth/refresh`) with
+        the same attributes they were set with; logout also expires `login_challenge`.
+      required: true
+      schema:
+        type: string
+        pattern: '^(access_token|refresh_token|login_challenge)=;.*Expires=Thu, 01 Jan 1970'
     SetLoginBindingCookie:
       description: '`login_challenge=<challengeId>; Path=/api/auth/confirm; HttpOnly; SameSite=Lax` (10 min).'
       required: true
@@ -465,6 +587,8 @@ components:
         - AUTH_CHALLENGE_OTHER_BROWSER
         - AUTH_CODE_INVALID
         - AUTH_INVALID_CREDENTIALS
+        - AUTH_REFRESH_INVALID
+        - AUTH_UNAUTHENTICATED
         - CONFLICT
         - CSRF_INVALID
         - INTERNAL_ERROR
@@ -712,6 +836,18 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ValidationErrorEnvelope'
+    Unauthenticated:
+      description: >-
+        No valid `access_token` cookie: missing, expired, tampered, or the account is no longer
+        active or had its sessions revoked. Refresh the session and repeat the request.
+      x-error-codes: [AUTH_UNAUTHENTICATED]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
     CsrfInvalid:
       description: The `X-CSRF-Token` header is missing or does not match the `csrf_token` cookie.
       x-error-codes: [CSRF_INVALID]

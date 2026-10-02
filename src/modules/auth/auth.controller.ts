@@ -13,6 +13,8 @@ import type { Request, Response } from 'express';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 
+import { Public } from '@/common/decorators';
+import { AppException, ErrorCode } from '@/common/errors';
 import {
   CSRF_COOKIE,
   csrfCookieOptions,
@@ -38,9 +40,14 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResendConfirmationDto } from './dto/resend-confirmation.dto';
 import { userOrConfirmationSchema } from './dto/user-or-confirmation.dto';
-import { LOGIN_BINDING_COOKIE, SessionCookies } from './session-cookies';
+import {
+  LOGIN_BINDING_COOKIE,
+  REFRESH_COOKIE,
+  SessionCookies,
+} from './session-cookies';
 
 const bindingCookieSchema = z.object({ [LOGIN_BINDING_COOKIE]: z.string() });
+const refreshCookieSchema = z.object({ [REFRESH_COOKIE]: z.string().min(1) });
 
 function boundChallengeId(request: Request): string | undefined {
   const parsed = bindingCookieSchema.safeParse(request.cookies);
@@ -57,6 +64,8 @@ function confirmationRequired(
   };
 }
 
+// Each handler opts out of the access-token guard on its own (decision A19): these are how a
+// session starts, renews or ends. A handler added without @Public() is protected.
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -66,6 +75,7 @@ export class AuthController {
   ) {}
 
   @Get('confirm')
+  @Public()
   @RateLimit('confirm')
   @ZodSerializerDto(UserEnvelopeDto)
   async confirmWithLink(
@@ -80,6 +90,7 @@ export class AuthController {
   }
 
   @Post('confirm')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @RateLimit('confirm')
   @ZodSerializerDto(UserEnvelopeDto)
@@ -94,6 +105,7 @@ export class AuthController {
   }
 
   @Get('csrf')
+  @Public()
   @HttpCode(HttpStatus.NO_CONTENT)
   csrf(@Res({ passthrough: true }) response: Response): void {
     response.cookie(
@@ -104,6 +116,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ZodSerializerDto(userOrConfirmationSchema)
   async login(
@@ -121,7 +134,45 @@ export class AuthController {
     return confirmationRequired(result.challenge);
   }
 
+  // Notion "Авторизация" 1.4: logout cannot revoke an issued refresh token; it clears the cookies.
+  @Post('logout')
+  @Public()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  logout(@Res({ passthrough: true }) response: Response): void {
+    response.setHeader('Cache-Control', 'no-store');
+    this.sessionCookies.clear(response);
+    this.sessionCookies.clearLoginBinding(response);
+  }
+
+  @Post('refresh')
+  @Public()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async refresh(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<void> {
+    const cookies = refreshCookieSchema.safeParse(request.cookies);
+    try {
+      const session = await this.authService.refresh(
+        cookies.success ? cookies.data[REFRESH_COOKIE] : undefined,
+      );
+      this.sessionCookies.set(response, session);
+    } catch (error: unknown) {
+      // A refused refresh ends the session in this browser (09-auth → Refresh); a server error
+      // does not, or a database hiccup would sign everyone out.
+      if (
+        error instanceof AppException &&
+        error.code === ErrorCode.AUTH_REFRESH_INVALID
+      ) {
+        response.setHeader('Cache-Control', 'no-store');
+        this.sessionCookies.clear(response);
+      }
+      throw error;
+    }
+  }
+
   @Post('register')
+  @Public()
   @RateLimit('mail')
   @ZodSerializerDto(userOrConfirmationSchema)
   async register(
@@ -138,6 +189,7 @@ export class AuthController {
   }
 
   @Post('confirm/resend')
+  @Public()
   @HttpCode(HttpStatus.ACCEPTED)
   @RateLimit('mail')
   @ZodSerializerDto(ConfirmationRequiredDto)
