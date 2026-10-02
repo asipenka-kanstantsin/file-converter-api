@@ -37,7 +37,7 @@ describe('SingleFileUpload', () => {
   it('passes through when the upload parsed', async () => {
     currentError = undefined;
     await expect(
-      new Interceptor().intercept(context(), next),
+      new Interceptor({}).intercept(context(), next),
     ).resolves.toBeDefined();
   });
 
@@ -46,7 +46,7 @@ describe('SingleFileUpload', () => {
     currentError = new MulterError('LIMIT_FILE_SIZE');
 
     await expect(
-      new Interceptor().intercept(context(), next),
+      new Interceptor({}).intercept(context(), next),
     ).rejects.toMatchObject({
       code: 'FILE_TOO_LARGE',
       context: { maxBytes: 10 },
@@ -58,7 +58,7 @@ describe('SingleFileUpload', () => {
     currentError = new Error('Unexpected end of form');
 
     await expect(
-      new Interceptor().intercept(context(), next),
+      new Interceptor({}).intercept(context(), next),
     ).rejects.toMatchObject({
       code: 'MALFORMED_REQUEST',
       status: 400,

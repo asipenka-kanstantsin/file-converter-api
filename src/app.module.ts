@@ -27,6 +27,7 @@ import { HealthModule } from '@/modules/health';
 import { OpenApiModule } from '@/modules/openapi';
 import { PermissionGuard, RbacModule } from '@/modules/rbac';
 import { SettingsModule } from '@/modules/settings';
+import { TransformationsModule } from '@/modules/transformations';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { SettingsModule } from '@/modules/settings';
         throttlers: buildThrottlers(config),
       }),
     }),
+    TransformationsModule,
   ],
   providers: [
     { provide: APP_PIPE, useClass: ZodValidationPipe },

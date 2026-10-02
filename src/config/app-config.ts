@@ -21,6 +21,7 @@ export class AppConfig {
     resendCooldownSeconds: number;
     ttlSeconds: number;
   };
+  readonly conversion!: { timeoutMs: number; workers: number | undefined };
   readonly db!: { url: string };
   readonly jobs!: { enabled: boolean; outboxPollIntervalMs: number };
   readonly log!: { level: Env['LOG_LEVEL']; pretty: boolean };
@@ -48,6 +49,7 @@ export class AppConfig {
   };
   readonly throttle!: {
     confirmLimit: number;
+    convertLimit: number;
     limit: number;
     loginBlockSeconds: number;
     loginLimit: number;
@@ -80,6 +82,10 @@ export function buildAppConfig(env: Env): AppConfig {
       resendCooldownSeconds: env.CONFIRMATION_RESEND_COOLDOWN_SECONDS,
       ttlSeconds: env.CONFIRMATION_TTL_SECONDS,
     }),
+    conversion: Object.freeze({
+      timeoutMs: env.CONVERSION_TIMEOUT_MS,
+      workers: env.CONVERSION_WORKERS,
+    }),
     db: Object.freeze({ url: env.DATABASE_URL }),
     jobs: Object.freeze({
       enabled: env.JOBS_ENABLED,
@@ -110,6 +116,7 @@ export function buildAppConfig(env: Env): AppConfig {
     }),
     throttle: Object.freeze({
       confirmLimit: env.THROTTLE_CONFIRM_LIMIT,
+      convertLimit: env.THROTTLE_CONVERT_LIMIT,
       limit: env.THROTTLE_LIMIT,
       loginBlockSeconds: env.THROTTLE_LOGIN_BLOCK_SECONDS,
       loginLimit: env.THROTTLE_LOGIN_LIMIT,

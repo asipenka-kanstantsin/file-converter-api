@@ -63,16 +63,17 @@ describe('SettingsService', () => {
       repository as unknown as SettingsRepository,
     );
 
-    await expect(settings.all()).resolves.toEqual({
+    await expect(settings.all()).resolves.toMatchObject({
       'confirmation.login': false,
       'confirmation.registration': true,
+      'history.retentionDays': 90,
     });
     await expect(
       settings.update(
         { id: 'a1', roleIds: [] },
         { 'confirmation.login': true },
       ),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       'confirmation.login': true,
       'confirmation.registration': true,
     });

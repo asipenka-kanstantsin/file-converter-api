@@ -4,6 +4,7 @@ import { ErrorCode } from '@/common/errors';
 import type { AuthService } from '@/modules/auth';
 import type { FilesService } from '@/modules/files';
 import type { RbacAdminService, RbacService } from '@/modules/rbac';
+import type { TransformationsService } from '@/modules/transformations';
 import type { User, UsersService } from '@/modules/users';
 
 import { AccountsService } from './accounts.service';
@@ -33,6 +34,7 @@ function setup(
       {} as FilesService,
       { can } as unknown as RbacService,
       {} as RbacAdminService,
+      {} as TransformationsService,
       { findById } as unknown as UsersService,
     ),
   };

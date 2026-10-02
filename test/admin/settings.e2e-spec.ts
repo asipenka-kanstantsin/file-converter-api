@@ -43,19 +43,39 @@ describe('admin settings', () => {
     const res = await admin.client.agent.get(URL);
 
     expectContract('get', URL, res);
-    expect(res.body).toEqual({
+    expect(res.body).toMatchObject({
       settings: {
         'confirmation.login': false,
         'confirmation.registration': false,
+        'convert.maxBytes.csv': 10 * 1024 * 1024,
+        'convert.maxBytes.png': 15 * 1024 * 1024,
+        'convert.svg.maxWidth': 4096,
+        'history.retentionDays': 90,
       },
     });
+  });
+
+  it('changes a numeric setting within its bounds only', async () => {
+    const ok = await patch({ 'convert.maxBytes.csv': 1024 });
+    expect(ok.body).toMatchObject({
+      settings: { 'convert.maxBytes.csv': 1024 },
+    });
+
+    for (const body of [
+      { 'convert.maxBytes.csv': 0 },
+      { 'history.retentionDays': 1.5 },
+      { 'convert.svg.maxWidth': 100_000 },
+    ]) {
+      const res = await patch(body);
+      expect(res.status).toBe(400);
+    }
   });
 
   it('changes only the given keys, and the change applies at once', async () => {
     const res = await patch({ 'confirmation.registration': true });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({
+    expect(res.body).toMatchObject({
       settings: {
         'confirmation.login': false,
         'confirmation.registration': true,

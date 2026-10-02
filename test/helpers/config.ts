@@ -1,6 +1,7 @@
 import { AppConfig, loadAppConfig } from '@/config';
 
 interface Overrides {
+  conversion?: Partial<AppConfig['conversion']>;
   db?: AppConfig['db'];
   storage?: AppConfig['storage'];
   throttle?: Partial<AppConfig['throttle']>;
@@ -14,6 +15,7 @@ export function testConfig(overrides: Overrides): AppConfig {
     app: base.app,
     auth: base.auth,
     confirmation: base.confirmation,
+    conversion: Object.freeze({ ...base.conversion, ...overrides.conversion }),
     db: overrides.db ?? base.db,
     jobs: base.jobs,
     log: base.log,

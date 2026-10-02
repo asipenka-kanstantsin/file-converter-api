@@ -20,22 +20,23 @@ enum UserStatus {
 }
 
 model User {
-  id           String      @id @default(uuid(7)) @db.Uuid
-  email        String      @unique(map: "users_email_key") @db.VarChar(254)
-  passwordHash String      @map("password_hash")
-  displayName  String?     @map("display_name") @db.VarChar(100)
-  photoFileId  String?     @unique(map: "users_photo_file_id_key") @map("photo_file_id") @db.Uuid
-  photo        File?       @relation("UserPhoto", fields: [photoFileId], references: [id], onDelete: SetNull, map: "users_photo_file_id_fkey")
-  files        File[]      @relation("FileOwner")
-  status       UserStatus
-  tokenVersion Int         @default(0) @map("token_version")
-  lastLoginAt  DateTime?   @map("last_login_at") @db.Timestamptz(3)
+  id              String           @id @default(uuid(7)) @db.Uuid
+  email           String           @unique(map: "users_email_key") @db.VarChar(254)
+  passwordHash    String           @map("password_hash")
+  displayName     String?          @map("display_name") @db.VarChar(100)
+  photoFileId     String?          @unique(map: "users_photo_file_id_key") @map("photo_file_id") @db.Uuid
+  photo           File?            @relation("UserPhoto", fields: [photoFileId], references: [id], onDelete: SetNull, map: "users_photo_file_id_fkey")
+  files           File[]           @relation("FileOwner")
+  status          UserStatus
+  tokenVersion    Int              @default(0) @map("token_version")
+  lastLoginAt     DateTime?        @map("last_login_at") @db.Timestamptz(3)
   // Set when the account was deleted (anonymised in place, decision D1).
-  deletedAt    DateTime?   @map("deleted_at") @db.Timestamptz(3)
-  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
-  challenges   Challenge[]
-  roles        UserRole[]
+  deletedAt       DateTime?        @map("deleted_at") @db.Timestamptz(3)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  challenges      Challenge[]
+  roles           UserRole[]
+  transformations Transformation[]
 
   @@index([createdAt, id], map: "users_created_at_id_idx")
   @@index([status, createdAt, id], map: "users_status_created_at_id_idx")
@@ -173,20 +174,63 @@ enum FilePurpose {
 // Source of truth for stored objects (12-storage): an object without a row does not exist for
 // the app. Business rows reference files.id, never a key or a URL.
 model File {
-  id           String      @id @default(uuid(7)) @db.Uuid
-  ownerId      String      @map("owner_id") @db.Uuid
-  owner        User        @relation("FileOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  purpose      FilePurpose
-  key          String      @unique(map: "files_key_key") @db.VarChar(200)
-  originalName String?     @map("original_name") @db.VarChar(255)
-  mime         String      @db.VarChar(100)
-  size         Int
-  checksum     String      @db.Char(64)
-  expiresAt    DateTime?   @map("expires_at") @db.Timestamptz(3)
-  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  photoOf      User?       @relation("UserPhoto")
+  id             String          @id @default(uuid(7)) @db.Uuid
+  ownerId        String          @map("owner_id") @db.Uuid
+  owner          User            @relation("FileOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  purpose        FilePurpose
+  key            String          @unique(map: "files_key_key") @db.VarChar(200)
+  originalName   String?         @map("original_name") @db.VarChar(255)
+  mime           String          @db.VarChar(100)
+  size           Int
+  checksum       String          @db.Char(64)
+  expiresAt      DateTime?       @map("expires_at") @db.Timestamptz(3)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  photoOf        User?           @relation("UserPhoto")
+  transformation Transformation?
 
   @@index([ownerId], map: "files_owner_id_idx")
   @@index([expiresAt], map: "files_expires_at_idx")
   @@map("files")
+}
+
+enum TransformationType {
+  file
+  image
+
+  @@map("transformation_type")
+}
+
+enum TransformationStatus {
+  success
+  error
+
+  @@map("transformation_status")
+}
+
+// Every conversion request that reached the converter (Notion "Общие требования": the history of
+// all operations, linked to the user). Kept for the retention period (F5), then deleted with its
+// saved result.
+model Transformation {
+  id           String               @id @default(uuid(7)) @db.Uuid
+  userId       String               @map("user_id") @db.Uuid
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         TransformationType
+  // Null when the format could not be determined (415).
+  sourceFormat String?              @map("source_format") @db.VarChar(10)
+  targetFormat String               @map("target_format") @db.VarChar(10)
+  status       TransformationStatus
+  fileSize     Int                  @map("file_size")
+  durationMs   Int                  @map("duration_ms")
+  errorCode    String?              @map("error_code") @db.VarChar(64)
+  // Set when the result was saved (save=true); the file goes with the row.
+  resultFileId String?              @unique(map: "transformations_result_file_id_key") @map("result_file_id") @db.Uuid
+  resultFile   File?                @relation(fields: [resultFileId], references: [id], onDelete: SetNull, map: "transformations_result_file_id_fkey")
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt    DateTime             @map("expires_at") @db.Timestamptz(3)
+
+  @@index([userId, createdAt, id], map: "transformations_user_id_created_at_id_idx")
+  @@index([userId, type, createdAt, id], map: "transformations_user_id_type_created_at_id_idx")
+  @@index([userId, status, createdAt, id], map: "transformations_user_id_status_created_at_id_idx")
+  @@index([expiresAt], map: "transformations_expires_at_idx")
+  @@map("transformations")
 }

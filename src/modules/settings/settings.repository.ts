@@ -20,7 +20,9 @@ export class SettingsRepository {
     return new Map(rows.map((row) => [row.key, row.value]));
   }
 
-  async upsertValues(values: Readonly<Record<string, boolean>>): Promise<void> {
+  async upsertValues(
+    values: Readonly<Record<string, boolean | number>>,
+  ): Promise<void> {
     for (const [key, value] of Object.entries(values)) {
       await this.txHost.tx.appSetting.upsert({
         create: { key, value },

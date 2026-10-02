@@ -41,6 +41,7 @@ describe('parseAppConfig', () => {
     expect(config.log).toEqual({ level: 'info', pretty: false });
     expect(config.throttle).toEqual({
       confirmLimit: 10,
+      convertLimit: 30,
       limit: 100,
       loginBlockSeconds: 900,
       loginLimit: 5,

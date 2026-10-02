@@ -23,7 +23,13 @@ export const ERROR_MESSAGES = {
     'Your session has ended. Please sign in again.',
   [ErrorCode.AUTH_UNAUTHENTICATED]: 'Sign in to continue.',
   [ErrorCode.CONFLICT]: 'The request conflicts with the current state.',
+  [ErrorCode.CONVERSION_NOT_SUPPORTED]: 'This conversion is not supported.',
+  [ErrorCode.CONVERSION_TIMEOUT]:
+    'The conversion took too long and was stopped.',
   [ErrorCode.CSRF_INVALID]: 'The request is missing a valid CSRF token.',
+  [ErrorCode.FILE_EMPTY]: 'The file is empty.',
+  [ErrorCode.FILE_ENCODING_INVALID]: 'The file must be UTF-8 encoded.',
+  [ErrorCode.FILE_PARSE_ERROR]: 'The file is not valid for its format.',
   [ErrorCode.FILE_TOO_LARGE]: 'The file is too large.',
   [ErrorCode.FILE_TYPE_NOT_SUPPORTED]: 'This file type is not supported.',
   [ErrorCode.INTERNAL_ERROR]: 'Something went wrong. Please try again later.',
@@ -55,6 +61,8 @@ export const ERROR_MESSAGES = {
   [ErrorCode.SERVICE_UNAVAILABLE]: 'The service is temporarily unavailable.',
   [ErrorCode.STORAGE_UNAVAILABLE]:
     'File storage is unavailable. Please try again later.',
+  [ErrorCode.STRUCTURE_TOO_COMPLEX]:
+    'The file is nested too deeply or is too large to convert.',
   [ErrorCode.UNSUPPORTED_MEDIA_TYPE]:
     'The request content type or encoding is not supported.',
   [ErrorCode.USER_EMAIL_TAKEN]: 'This e-mail is already registered.',

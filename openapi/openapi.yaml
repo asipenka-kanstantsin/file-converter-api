@@ -44,6 +44,10 @@ tags:
       applied without a restart. Every signed-in account implicitly holds the `user` role.
   - name: admin
     description: Runtime settings.
+  - name: transformations
+    description: >-
+      File conversions (CSV, JSON, XML, YAML) and their history. Every attempt is recorded; a
+      result can be saved for download.
 security: []
 
 paths:
@@ -999,6 +1003,125 @@ paths:
         default:
           $ref: '#/components/responses/Default'
 
+  /api/convert:
+    post:
+      operationId: transformations_convertFile
+      tags: [transformations]
+      summary: Convert a CSV, JSON, XML or YAML file
+      description: |
+        Multipart fields: `file`, `targetFormat` (`csv` | `json` | `xml` | `yaml`), optional
+        `save` (`true` | `false`, default false). The source format comes from the file's
+        extension (`.csv`, `.json`, `.xml`, `.yaml`/`.yml`) or, without one, from the content
+        (XML and JSON only). Input must be UTF-8 (a BOM is accepted); the size limit depends on
+        the source format (admin setting). Every pair of different formats is supported; the
+        rules for ambiguous pairs are in `docs/conversion-rules.md`. The result is produced
+        completely before it is sent, so an error never yields a partial file. With `save=true`
+        the result is stored after the response and becomes downloadable from the history.
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, targetFormat]
+              properties:
+                file:
+                  type: string
+                  contentMediaType: application/octet-stream
+                targetFormat:
+                  type: string
+                  enum: [csv, json, xml, yaml]
+                save:
+                  type: string
+                  enum: ['true', 'false']
+      responses:
+        '200':
+          description: The converted file.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Content-Disposition:
+              required: true
+              schema:
+                type: string
+                pattern: '^attachment; filename="converted\.(csv|json|xml|yaml)"$'
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            text/csv:
+              schema:
+                type: string
+            application/json:
+              schema: {}
+            application/xml:
+              schema:
+                type: string
+            application/yaml:
+              schema:
+                type: string
+        '400':
+          description: Invalid parameters, an empty, non-UTF-8 or invalid file, a structure too deep, an unsupported pair, or a conversion that timed out (30 s).
+          x-error-codes: [CONVERSION_NOT_SUPPORTED, CONVERSION_TIMEOUT, FILE_EMPTY, FILE_ENCODING_INVALID, FILE_PARSE_ERROR, MALFORMED_REQUEST, STRUCTURE_TOO_COMPLEX, VALIDATION_FAILED]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOrValidationEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '413':
+          $ref: '#/components/responses/FileTooLarge'
+        '415':
+          $ref: '#/components/responses/FileTypeNotSupported'
+        '503':
+          description: Every conversion worker and the queue are busy; retry shortly.
+          x-error-codes: [SERVICE_UNAVAILABLE]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/convert/formats:
+    get:
+      operationId: transformations_fileFormats
+      tags: [transformations]
+      summary: Supported file conversions
+      security:
+        - accessCookie: []
+      responses:
+        '200':
+          description: Every source format with its targets.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FormatPairs'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
   /api/admin/rbac/roles:
     get:
       operationId: rbac_listRoles
@@ -1633,8 +1756,9 @@ paths:
       tags: [admin]
       summary: Change runtime settings
       description: |
-        Switches e-mail confirmation per scenario without a deploy. Only the given keys change;
-        unknown keys are refused.
+        E-mail confirmation per scenario, conversion size limits per input format, SVG raster
+        limits and history retention, without a deploy. Only the given keys change; unknown keys
+        and out-of-range values are refused.
       x-permission: settings@manage
       security:
         - accessCookie: []
@@ -1799,7 +1923,12 @@ components:
         - AUTH_REFRESH_INVALID
         - AUTH_UNAUTHENTICATED
         - CONFLICT
+        - CONVERSION_NOT_SUPPORTED
+        - CONVERSION_TIMEOUT
         - CSRF_INVALID
+        - FILE_EMPTY
+        - FILE_ENCODING_INVALID
+        - FILE_PARSE_ERROR
         - FILE_TOO_LARGE
         - FILE_TYPE_NOT_SUPPORTED
         - INTERNAL_ERROR
@@ -1823,6 +1952,7 @@ components:
         - ROUTE_NOT_FOUND
         - SERVICE_UNAVAILABLE
         - STORAGE_UNAVAILABLE
+        - STRUCTURE_TOO_COMPLEX
         - UNSUPPORTED_MEDIA_TYPE
         - USER_EMAIL_TAKEN
         - USER_NOT_ACTIVE
@@ -2180,7 +2310,7 @@ components:
     Settings:
       type: object
       additionalProperties: false
-      required: [confirmation.login, confirmation.registration]
+      required: [confirmation.login, confirmation.registration, convert.maxBytes.csv, convert.maxBytes.jpeg, convert.maxBytes.json, convert.maxBytes.png, convert.maxBytes.svg, convert.maxBytes.xml, convert.maxBytes.yaml, convert.svg.maxHeight, convert.svg.maxWidth, history.retentionDays]
       properties:
         confirmation.login:
           type: boolean
@@ -2188,6 +2318,56 @@ components:
         confirmation.registration:
           type: boolean
           description: Registration needs an e-mailed code or link.
+        convert.maxBytes.csv:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted CSV input, in bytes.
+        convert.maxBytes.jpeg:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted JPEG input, in bytes.
+        convert.maxBytes.json:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted JSON input, in bytes.
+        convert.maxBytes.png:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted PNG input, in bytes.
+        convert.maxBytes.svg:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted SVG input, in bytes.
+        convert.maxBytes.xml:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted XML input, in bytes.
+        convert.maxBytes.yaml:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted YAML input, in bytes.
+        convert.svg.maxHeight:
+          type: integer
+          minimum: 16
+          maximum: 16384
+          description: Largest raster height an SVG may be rendered to.
+        convert.svg.maxWidth:
+          type: integer
+          minimum: 16
+          maximum: 16384
+          description: Largest raster width an SVG may be rendered to.
+        history.retentionDays:
+          type: integer
+          minimum: 1
+          maximum: 3650
+          description: How long history rows and saved results are kept.
     SettingsEnvelope:
       type: object
       additionalProperties: false
@@ -2202,8 +2382,60 @@ components:
       properties:
         confirmation.login:
           type: boolean
+          description: Sign-in needs an e-mailed code or link.
         confirmation.registration:
           type: boolean
+          description: Registration needs an e-mailed code or link.
+        convert.maxBytes.csv:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted CSV input, in bytes.
+        convert.maxBytes.jpeg:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted JPEG input, in bytes.
+        convert.maxBytes.json:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted JSON input, in bytes.
+        convert.maxBytes.png:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted PNG input, in bytes.
+        convert.maxBytes.svg:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted SVG input, in bytes.
+        convert.maxBytes.xml:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted XML input, in bytes.
+        convert.maxBytes.yaml:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+          description: Largest accepted YAML input, in bytes.
+        convert.svg.maxHeight:
+          type: integer
+          minimum: 16
+          maximum: 16384
+          description: Largest raster height an SVG may be rendered to.
+        convert.svg.maxWidth:
+          type: integer
+          minimum: 16
+          maximum: 16384
+          description: Largest raster width an SVG may be rendered to.
+        history.retentionDays:
+          type: integer
+          minimum: 1
+          maximum: 3650
+          description: How long history rows and saved results are kept.
 
     Profile:
       type: object
@@ -2301,6 +2533,9 @@ components:
               properties:
                 maxBytes:
                   type: integer
+                format:
+                  type: string
+                  description: The source format whose limit applies (conversions).
 
     UserListItem:
       type: object
@@ -2335,6 +2570,20 @@ components:
             $ref: '#/components/schemas/UserListItem'
         nextCursor:
           type: [string, 'null']
+
+    FormatPairs:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [source, target]
+        properties:
+          source:
+            type: string
+          target:
+            type: array
+            items:
+              type: string
 
     ErrorOrValidationEnvelope:
       anyOf:

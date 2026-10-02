@@ -2,33 +2,43 @@ import {
   type CallHandler,
   type ExecutionContext,
   HttpStatus,
+  Inject,
+  Injectable,
   mixin,
   type NestInterceptor,
   type Type,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import type { Request, Response } from 'express';
 import multer, { MulterError } from 'multer';
 import type { Observable } from 'rxjs';
 
 import { AppException, ErrorCode } from '@/common/errors';
 
-// One multipart file in memory, at most `maxBytes` (12-storage → Upload validation). The size is
+// Resolves the limit per request (a runtime setting, F1); gets the module's providers.
+export type UploadLimit = number | ((moduleRef: ModuleRef) => Promise<number>);
+
+// One multipart file in memory, at most the limit (12-storage → Upload validation). The size is
 // enforced while streaming, so an oversized upload is cut off, not buffered. Errors become the
 // API's own codes instead of Nest's generic ones.
 export function SingleFileUpload(
   field: string,
-  maxBytes: number,
+  limit: UploadLimit,
 ): Type<NestInterceptor> {
-  const upload = multer({
-    limits: { fields: 10, files: 1, fileSize: maxBytes, parts: 12 },
-    storage: multer.memoryStorage(),
-  }).single(field);
-
+  @Injectable()
   class SingleFileUploadInterceptor implements NestInterceptor {
+    constructor(@Inject(ModuleRef) private readonly moduleRef: ModuleRef) {}
+
     async intercept(
       context: ExecutionContext,
       next: CallHandler,
     ): Promise<Observable<unknown>> {
+      const maxBytes =
+        typeof limit === 'number' ? limit : await limit(this.moduleRef);
+      const upload = multer({
+        limits: { fields: 10, files: 1, fileSize: maxBytes, parts: 12 },
+        storage: multer.memoryStorage(),
+      }).single(field);
       const http = context.switchToHttp();
       await new Promise<void>((resolve, reject) => {
         upload(

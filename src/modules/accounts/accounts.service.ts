@@ -8,6 +8,7 @@ import type { StoredObject } from '@/infrastructure/storage';
 import { AuthService, type OwnerConfirmation } from '@/modules/auth';
 import { FilesService } from '@/modules/files';
 import { RbacAdminService, RbacService } from '@/modules/rbac';
+import { TransformationsService } from '@/modules/transformations';
 import { type User, type UserChanges, UsersService } from '@/modules/users';
 
 import { processPhoto } from './photo.processor';
@@ -61,6 +62,7 @@ export class AccountsService {
     private readonly files: FilesService,
     private readonly rbac: RbacService,
     private readonly rbacAdmin: RbacAdminService,
+    private readonly transformations: TransformationsService,
     private readonly users: UsersService,
   ) {}
 
@@ -234,6 +236,7 @@ export class AccountsService {
     for (const fileId of await this.files.idsOwnedBy(userId)) {
       await this.files.remove(fileId);
     }
+    await this.transformations.forgetUser(userId);
     await this.rbacAdmin.removeAllRoles(userId);
     await this.auth.forgetUser(userId);
     return this.users.anonymise(userId);

@@ -8,26 +8,33 @@ import {
   RequirePermission,
 } from '@/common/decorators';
 
-import { type FlagKey, FLAGS, type Flags } from './settings.definitions';
+import {
+  type SettingKey,
+  SETTINGS,
+  type Settings,
+} from './settings.definitions';
 import { SettingsService } from './settings.service';
 
-// Derived from FLAGS, so a new flag is settable as soon as it exists.
-const flagsSchema = z.object(
+// Derived from SETTINGS, so a new setting is settable as soon as it exists, with its own bounds.
+const settingsSchema = z.object(
   Object.fromEntries(
-    Object.keys(FLAGS).map((key) => [key, z.boolean()]),
-  ) as Record<FlagKey, z.ZodBoolean>,
+    Object.entries(SETTINGS).map(([key, { schema }]) => [key, schema]),
+  ) as { [K in SettingKey]: (typeof SETTINGS)[K]['schema'] },
 );
 
 // Unknown keys are refused, so a typo cannot silently change nothing.
-const flagsPatchSchema = z
-  .strictObject(flagsSchema.shape)
+const settingsPatchSchema = z
+  .strictObject(settingsSchema.shape)
   .partial()
   .refine((patch) => Object.keys(patch).length > 0, { message: 'empty' });
 
-class SettingsDto extends createZodDto(z.object({ settings: flagsSchema })) {}
-class SettingsPatchDto extends createZodDto(flagsPatchSchema) {}
+class SettingsDto extends createZodDto(
+  z.object({ settings: settingsSchema }),
+) {}
+class SettingsPatchDto extends createZodDto(settingsPatchSchema) {}
 
-// Decisions A6/A11: the admin switches e-mail confirmation per scenario without a deploy.
+// Decisions A6/A11/F1: e-mail confirmation per scenario, conversion limits and retention,
+// changed without a deploy.
 @Controller('admin/settings')
 @RequirePermission('settings', 'manage')
 export class SettingsAdminController {
@@ -35,7 +42,7 @@ export class SettingsAdminController {
 
   @Get()
   @ZodSerializerDto(SettingsDto)
-  async get(): Promise<{ settings: Flags }> {
+  async get(): Promise<{ settings: Settings }> {
     return { settings: await this.settings.all() };
   }
 
@@ -44,7 +51,7 @@ export class SettingsAdminController {
   async update(
     @CurrentUser() actor: AuthUser,
     @Body() changes: SettingsPatchDto,
-  ): Promise<{ settings: Flags }> {
+  ): Promise<{ settings: Settings }> {
     return { settings: await this.settings.update(actor, changes) };
   }
 }
