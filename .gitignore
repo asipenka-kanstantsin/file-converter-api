@@ -1,0 +1,30 @@
+# compiled output
+/dist
+/node_modules
+/build
+/coverage
+/.nyc_output
+
+# generated
+/src/generated/
+
+# env (.env.example and .env.test hold no real secrets and are committed)
+.env
+.env.local
+.env.*.local
+
+# confidential Notion export
+/docs/requirements/
+docs/creds.md
+
+# local data
+/var/
+
+# tooling
+.claude/settings.local.json
+*.log
+.DS_Store
+/.idea
+/.vscode/*
+!/.vscode/extensions.json
+*.tsbuildinfo

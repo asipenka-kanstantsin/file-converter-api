@@ -1,0 +1,1 @@
+export const OPENAPI_DOCUMENT = Symbol('OPENAPI_DOCUMENT');

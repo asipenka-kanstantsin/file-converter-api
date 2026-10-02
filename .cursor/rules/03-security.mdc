@@ -1,0 +1,20 @@
+---
+description: Security rules for every endpoint and log line
+alwaysApply: true
+---
+
+# Security Rules
+
+Full spec: `.cursor/knowledge/19-security.mdc` and `09-auth.mdc`.
+
+- Every route is authenticated by the global guard; `@Public()` is an explicit, reviewed exception.
+- Check ownership or role on the resource in the service, not only in a guard.
+- Unsafe methods (POST, PUT, PATCH, DELETE) require the CSRF header when authenticated by cookie.
+- Passwords hashed with argon2id; OTPs and magic-link tokens stored hashed, compared in constant time.
+- Refresh tokens are JWTs and are **never stored** server-side in any form (Notion «Авторизация»).
+- Never log or return secrets, tokens, passwords, OTP codes, full emails, or file contents.
+- Error responses never carry stack traces, SQL, or ORM messages.
+- Rate-limit login, sign-up, OTP, password reset and every endpoint that sends mail.
+- Uploads: size limit per format, type checked by content, server-generated storage key, private;
+  downloads streamed through the API after the permission check.
+- Do not reveal whether an email is registered on public auth endpoints unless the AC requires it.

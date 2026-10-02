@@ -1,0 +1,136 @@
+---
+description: File and image conversion — transformer abstraction and registry, worker threads, limits, parser security, history, ambiguous-pair rules
+alwaysApply: false
+---
+
+# Transformations Knowledge
+
+Project-specific: built from the Notion pages "Общие требования к трансформации файлов",
+"Трансформация текстовых форматов", "Трансформация изображений", "Просмотр истории
+трансформаций", "Сохранение результатов…", "Абстракции в ООП" and decisions F1–F5.
+
+## Shape
+
+```
+modules/transformations/
+  transformations.module.ts
+  core/
+    file-transformer.ts          abstract FileTransformer (template method)
+    transformer.registry.ts      (source, target) → transformer; lists supported pairs
+    format-detector.ts           magic bytes / content sniffing → SourceFormat
+  text/
+    text.controller.ts           POST /api/convert, GET /api/convert/formats
+    parsers/  serializers/       csv, json, xml, yaml ↔ internal Document
+    text-conversion.worker.ts    piscina worker entry
+  images/
+    images.controller.ts         POST /api/images/convert, GET /api/images/convert/formats
+    png-to-jpeg.transformer.ts …
+  history/
+    history.controller.ts        GET /api/transformations/history[/:itemId/download]
+    history-admin.controller.ts  GET /api/admin/users/:userId/transformations/history[…]
+    history.repository.ts
+  transformations.service.ts     run → record history → optional save
+```
+
+## The abstraction — open for extension, closed for modification
+
+Notion: adding a converter must not change existing contracts.
+
+```ts
+export abstract class FileTransformer {
+  abstract readonly source: SourceFormat;
+  abstract readonly target: TargetFormat;
+  abstract readonly kind: "file" | "image";
+
+  async run(input: Buffer, options: TransformOptions): Promise<TransformResult> {
+    this.validate(input, options);
+    return this.transform(input, options);
+  }
+
+  protected validate(input: Buffer, _options: TransformOptions): void {
+    if (input.length === 0) throw new AppException(ErrorCode.FILE_EMPTY, HttpStatus.BAD_REQUEST);
+  }
+
+  protected abstract transform(input: Buffer, options: TransformOptions): Promise<TransformResult>;
+}
+```
+
+- Each pair is one class registered through a multi-provider token (`TRANSFORMERS`); the registry
+  builds its map and the `/formats` responses from what is registered. A new pair = a new class +
+  one line in the module's providers. Nothing else changes.
+- Text formats go through one internal representation (`Document` = JSON value) — 4 parsers + 4
+  serializers give all 12 pairs; each registered transformer composes parser → serializer.
+- Controllers know nothing about formats beyond the DTO enum; the service picks the transformer.
+
+## Execution
+
+- Text conversion runs in a **worker thread pool** (`piscina`, size = CPU count − 1, min 1) so
+  parsing never blocks the event loop (Notion NFR). Each task has an `AbortSignal` with
+  `CONVERSION_TIMEOUT_MS` (30 s). The Notion contracts list only 400/401/413/415, so a timeout is
+  400 `CONVERSION_TIMEOUT` and is recorded in history as `error`.
+- Images run through `sharp` (native, libuv thread pool) with `limitInputPixels` and
+  `sequentialRead`; no worker needed.
+- **Atomic response**: the whole result is produced before the first byte is sent, then streamed
+  (`StreamableFile`). A failure after headers are sent must be impossible by construction.
+- Headers: `Content-Type` of the target, `Content-Disposition: attachment; filename="converted.<ext>"`.
+
+## Format detection
+
+| Format | Rule |
+| --- | --- |
+| PNG | magic `89 50 4E 47 0D 0A 1A 0A` |
+| JPEG | magic `FF D8 FF` |
+| SVG | UTF-8 text whose root element is `<svg` (after optional XML declaration / comments) |
+| JSON | parses as JSON (RFC 8259) |
+| XML | starts with `<` (after BOM/whitespace) and is not SVG |
+| YAML / CSV | by extension (`.yaml`/`.yml`, `.csv`) then by successful parse |
+
+Detected format ≠ claimed extension → detection wins. Unknown → 415 `FILE_TYPE_NOT_SUPPORTED`.
+
+## Limits (runtime settings, decision F1)
+
+`app_settings` keys `limits.input.<format>` (bytes), `limits.svg.maxWidth/maxHeight` (px),
+`history.retentionDays`. Read through `SettingsService` (cached, invalidated on admin update).
+Over the limit → 413 `FILE_TOO_LARGE` with `context.maxBytes`.
+
+## Parser security
+
+- **XML**: `fast-xml-parser` with `processEntities: false`, no DOCTYPE allowed (reject input
+  containing `<!DOCTYPE` / `<!ENTITY` → 400 `FILE_INVALID`): no XXE, no billion laughs.
+- **Depth / size**: reject documents nested deeper than 64 levels or with more than 1 000 000 nodes
+  (resource attack).
+- **YAML**: `yaml` with `maxAliasCount: 100`, schema `core` (YAML 1.2), no custom tags.
+- **CSV**: RFC 4180 via `csv-parse`, BOM stripped, `max_record_size` bounded.
+- **SVG**: reject `<script>`, `on*=` attributes, `javascript:` URLs, `<foreignObject>`, external
+  `href`/`xlink:href` (anything not `#…` or `data:image/…`), DOCTYPE/entities → 400
+  `SVG_UNSAFE`. Raster size = requested or intrinsic size; above the configured max → 400
+  `IMAGE_DIMENSIONS_EXCEEDED`.
+- **Encoding**: input must be UTF-8 (BOM stripped); otherwise 400 `FILE_ENCODING_INVALID`.
+- Decompression bombs: `sharp({ limitInputPixels: maxWidth * maxHeight })`.
+
+## Ambiguous pairs
+
+Rules live in `docs/conversion-rules.md` (decision F3) and every rule has a table-driven test:
+CSV ↔ array of flat objects (header row = keys; nested values flattened with dot paths), XML
+attributes as `@_name`, repeated elements → arrays, JSON → XML root `<root>` and arrays as repeated
+`<item>`, etc. A rule change is a contract change.
+
+## History
+
+- Every conversion (success or error) writes one `transformations` row: `user_id`, `type`,
+  `source_format`, `target_format`, `status`, `file_size`, `duration_ms`, `error_code`,
+  `file_id` (nullable), `created_at`. Indexes `(user_id, created_at, id)`, plus `type`, `status`.
+- History is written after the result is computed; writing it never changes the conversion
+  response. A failed history write is logged at `error`.
+- Never store or log file contents.
+- Lists: cursor pagination, filters `type`, `sourceFormat`, `targetFormat`, `status`,
+  `createdAtFrom`, `createdAtTo`.
+
+## Testing
+
+- Every transformer: success fixture → expected output (golden files), invalid input → code, empty
+  → `FILE_EMPTY`, BOM/Unicode, limits.
+- XXE, billion laughs, deep nesting, SVG with script/external ref, decompression bomb — each a test.
+- e2e: multipart upload over HTTP, response headers, history row, `save=true` → file row + object.
+- Worker path covered by e2e (the pool runs the compiled worker); unit tests call the pure
+  conversion function directly.

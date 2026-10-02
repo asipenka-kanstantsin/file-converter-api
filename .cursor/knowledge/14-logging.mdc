@@ -1,0 +1,121 @@
+---
+description: Logging, request id, redaction, health checks, metrics, audit log, graceful shutdown
+alwaysApply: false
+---
+
+# Logging & Observability Knowledge
+
+## Logger
+
+`nestjs-pino`, JSON to stdout, one line per event. Pretty printing (`pino-pretty`) only in local
+dev. The app logger replaces Nest's (`app.useLogger(app.get(Logger))`, `bufferLogs: true`).
+
+```ts
+export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+  // or: constructor(@InjectPinoLogger(UsersService.name) private readonly logger: PinoLogger) {}
+}
+this.logger.log({ userId }, "user created");
+```
+
+Structured fields first, short constant message second. No string interpolation of data into the
+message — it breaks search and invites leaks. `console.log` is banned by lint.
+
+## Request id
+
+- Incoming `X-Request-Id` is accepted if it is a sane token (≤ 64 chars, `[\w-]`), else a UUID is
+  generated. Echoed back as `X-Request-Id` on every response, errors included.
+- Stored in the request context via `nestjs-cls` (AsyncLocalStorage) together with `userId` and
+  `locale`; `pinoHttp.genReqId` and a `customProps` hook put `reqId`/`userId` on every line.
+- The outbox dispatcher and scheduled jobs open their own CLS context with a job id, and copy the
+  originating request id from the payload when there is one.
+
+## Levels
+
+| Level | Use |
+| --- | --- |
+| `error` | 5xx, failed job attempts that went dead, integrations down |
+| `warn` | auth failures, rate-limit hits, retries, suspicious input, deprecated usage |
+| `info` | request summary (pino-http), state changes worth tracing, job completed |
+| `debug` | local diagnosis; off in production |
+
+`LOG_LEVEL` from config. Health-check requests are excluded from the access log (`autoLogging.ignore`).
+
+## Redaction
+
+Configured once in `pinoHttp.redact`, `censor: "[redacted]"`:
+
+```ts
+redact: [
+  "req.headers.authorization", "req.headers.cookie", "req.headers['x-csrf-token']",
+  "res.headers['set-cookie']",
+  "*.password", "*.newPassword", "*.token", "*.refreshToken", "*.accessToken",
+  "*.otp", "*.otpCode", "*.secret", "*.email",
+]
+```
+
+- Request and response **bodies are not logged**. `*.code` is deliberately not redacted: it would
+  hide `err.code` (Prisma / pg / errno codes) needed for diagnosis; an OTP never reaches a log because
+  bodies and DTOs are never logged.
+- When an email must be traceable, log a masked form (`j***@example.com`) or the user id.
+- File contents, magic links, SMTP credentials and full DB connection strings never reach a log.
+
+## Error logging
+
+`AllExceptionsFilter` (`08-errors.mdc`) is the single place that logs failed requests:
+
+- 5xx → `error` with the error object (stack), `reqId`, route, method, userId.
+- selected 4xx (401, 403, 423, 429) → `warn` with `code`, no body.
+- The response carries the code and the request id header, never the stack.
+
+## Health
+
+A small `HealthController` (no `@nestjs/terminus`: the error envelope stays uniform), `@Public()`,
+`@SkipThrottle()`, health paths excluded from the access log:
+
+| Route | Checks | Used by |
+| --- | --- | --- |
+| `GET /health` | process up + DB `SELECT 1` — the endpoint the Notion NFR page names | monitoring |
+| `GET /health/live` | process up, event loop not blocked | liveness probe |
+| `GET /health/ready` | DB `SELECT 1` with a 2 s timeout | readiness probe, load balancer |
+
+A failed check answers 503 `SERVICE_UNAVAILABLE` with `context.checks`. Health responses never include versions of libraries,
+hostnames or connection strings.
+
+## Metrics (optional)
+
+`@willsoto/nestjs-prometheus` (or `prom-client`) at `/metrics`, not public — bound to an internal
+port or protected. Useful: HTTP duration histogram by route template, outbox pending/dead counts,
+job duration, DB pool usage.
+
+## Audit log
+
+Security-relevant actions go to an `audit_events` table, written in the same transaction as the
+action:
+
+| Column | |
+| --- | --- |
+| `id`, `created_at` | |
+| `actor_id` | nullable (anonymous login attempt) |
+| `action` | `auth.login_succeeded`, `auth.login_failed`, `auth.password_changed`, `user.role_changed`, `user.deactivated`, `admin.impersonation_started`, … |
+| `target_type` / `target_id` | |
+| `ip` / `user_agent` | |
+| `metadata` | jsonb, no secrets |
+
+Audit rows are append-only: no update/delete endpoint; retention decided per compliance need.
+Logs are for operators; the audit table is for "who did what".
+
+## Graceful shutdown
+
+- `app.enableShutdownHooks()`; on SIGTERM readiness flips to 503, the HTTP server stops accepting,
+  in-flight requests finish (timeout ~10–25 s, below the orchestrator's grace period).
+- The outbox dispatcher finishes the current batch and stops polling; claimed-but-unfinished rows
+  are released by their lease timeout (`20-jobs.mdc`).
+- DB pool and SMTP pool close in `onApplicationShutdown`.
+
+## Don't
+
+- Don't use `console.*`.
+- Don't log bodies, headers with credentials, tokens, OTPs or full emails.
+- Don't log the same error in the service and again in the filter.
+- Don't expose `/metrics` or detailed health publicly.

@@ -1,0 +1,36 @@
+---
+description: Core AI agent behavior
+alwaysApply: true
+---
+
+# Core Rules
+
+You are a senior backend engineer.
+
+Before making changes:
+
+1. Read AGENTS.md.
+2. Read relevant files from .cursor/knowledge/.
+3. Inspect the existing implementation and the closest similar module.
+4. Follow existing project patterns.
+
+For a new feature, run the Superpowers workflow first:
+
+```
+superpowers:brainstorming → superpowers:writing-plans → superpowers:executing-plans
+```
+
+Not required for bugfixes, refactors, or small isolated changes.
+
+Never:
+
+- create duplicate solutions
+- ignore module boundaries
+- change the HTTP contract or the schema silently
+- add dependencies without evaluation
+- use any
+
+Prefer:
+
+- existing code and existing modules
+- minimal changes

@@ -1,0 +1,395 @@
+---
+description: Git workflow — branches, commits, rebase, Squash and Merge, migrations in PRs
+alwaysApply: false
+---
+
+# Git Knowledge
+
+## Purpose
+
+This document defines the Git workflow for this project.
+
+Git history is part of the project context. Use Git information when it helps understand:
+
+- why code exists
+- previous decisions
+- current changes
+- when and why a migration was introduced
+
+---
+
+## General Rules
+
+For every task, create a separate branch from `main`.
+
+Core principles:
+
+- one task — one branch
+- Pull Request is required for all changes
+- direct commits to `main` are forbidden
+- before creating a PR, update your branch against the latest `main`
+- a migration ships in the same PR as the code that needs it
+
+---
+
+## Branch Naming
+
+Format:
+
+```
+<type>/<TASK-ID>_<short_description>
+```
+
+`TASK-ID` is an `FC-n` id from the task table in `docs/decisions.md`.
+
+Examples:
+
+```
+feat/FC-2_add_login
+feat/FC-10_text_conversion
+fix/FC-3_refresh_token_rotation
+hotfix/FC-0_outbox_dispatcher_stuck
+chore/FC-0_update_dependencies
+refactor/FC-6_split_users_service
+```
+
+---
+
+## Branch Types
+
+| Type | Purpose |
+|------|---------|
+| `feat` | New functionality |
+| `fix` | Bug fixes |
+| `hotfix` | Urgent production fix |
+| `refactor` | Refactoring without behavior change |
+| `chore` | Dependencies, CI/CD, infrastructure |
+| `docs` | Documentation |
+| `test` | Adding or updating tests |
+
+---
+
+## Working on a Task
+
+### 1. Update local `main`
+
+```bash
+git checkout main
+git pull
+```
+
+### 2. Create a new branch
+
+```bash
+git checkout -b feat/FC-2_add_login
+```
+
+### 3. Develop
+
+Implement the task on the feature branch.
+
+### 4. Sync with `main` regularly
+
+```bash
+git fetch origin
+git rebase origin/main
+```
+
+Prefer `rebase` over `merge` to keep project history linear.
+
+Avoid merge commits in feature branches.
+
+After a rebase that brings in new migrations from `main`, run `npm run db:migrate` locally and
+re-check that your own migration still applies on top of them (see Migrations below).
+
+---
+
+## Migrations
+
+Migrations are code. They follow the same branch → PR → review → Squash and Merge path.
+
+Rules:
+
+- the migration and the code that depends on it are in the **same PR**. Never merge code that needs
+  a column the schema does not have yet, or a migration nothing uses.
+- generate the migration (`npm run db:generate`); do not hand-write what the generator produces.
+- one logical schema change per migration; name it after the change
+  (`add_saved_searches`, `add_users_locale`).
+- a migration applied on a **shared environment** (dev, staging, prod) is frozen. Fix it with a new
+  migration, never by editing the old file.
+- **never merge a PR whose migration was edited after it was applied on a shared environment.**
+  The shared database already ran the old version and will not run the new one; the schema and the
+  history diverge silently. Revert the edit and add a follow-up migration.
+- if two branches add migrations, the one merged second rebases, regenerates or renames its migration
+  so the order is correct, and re-runs it against a database migrated from the new `main`.
+- a destructive step (drop column/table, narrowing type) goes in a later PR than the code that stops
+  using it (expand → migrate → contract). See `07-database-*.mdc` → Safe migrations.
+
+Before pushing a branch with a migration:
+
+```bash
+npm run db:migrate        # applies on a database migrated from main
+npm run test:e2e          # e2e runs against the migrated schema
+```
+
+---
+
+## Pull Request
+
+Before creating a Pull Request:
+
+- ensure the project builds
+- pass all CI checks (`npm run verify` locally)
+- resolve conflicts
+- remove temporary code and debug changes
+- add a description of the completed work
+- fill "Contract changes" and "Schema changes" in the PR template, or write "none"
+
+Best practices:
+
+- keep PRs small (ideally 300–500 lines of changes, generated migrations excluded)
+- one PR — one logical task
+- do not keep long-lived feature branches
+- ensure CI passes before requesting review
+
+---
+
+## Merge Pull Request
+
+Use only **Squash and Merge**.
+
+When merging a PR, always choose:
+
+✅ Squash and Merge
+
+This allows:
+
+- keeping a clean repository history
+- combining intermediate development commits
+- leaving one clear commit describing the completed task
+
+After merge, delete the working branch.
+
+Recommended squash commit message:
+
+- **one line only** — no body, no second paragraph
+- max **70 characters** for the entire message
+- format: `<type>: <description>` (Conventional Commits)
+- describe only what this PR actually changes
+- no `Co-authored-by`, `Authored-by`, or other trailers
+
+```
+feat: add saved searches endpoints
+fix: rotate refresh token on every refresh call
+```
+
+Bad:
+
+```
+fix: rotate refresh token on every refresh call
+
+Previously the old refresh token stayed valid until expiry, so a stolen cookie could be replayed.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+```
+
+---
+
+## Commits
+
+During development, any number of intermediate commits is allowed.
+
+Examples:
+
+```
+fix tests
+wip
+try another approach
+cleanup
+```
+
+Since Squash and Merge is used, all intermediate commits are combined into one final commit.
+
+### Message rules
+
+- **one line only** — no body, no second paragraph
+- max **70 characters** for the entire message
+- format: `<type>: <description>` (Conventional Commits)
+- types: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `hotfix`
+- describe only the changes in this commit
+- no unrelated context, no generic wording
+- no `Co-authored-by`, `Authored-by`, or other trailers
+
+For intermediate commits, prefer:
+
+- small, focused changes
+- descriptive messages when possible
+
+Good:
+
+```
+feat: add POST /api/assignments/{id}/publish
+fix: map users_email_key violation to USER_EMAIL_TAKEN
+fix: send OTP mail through the outbox
+refactor: move pagination helper to common
+chore: add index on matches.assignment_id
+test: cover OTP lockout after five wrong codes
+```
+
+Informal WIP commits during development are allowed (`wip`, `fix tests`, `cleanup`).
+
+Bad:
+
+```
+update
+changes
+fix
+migration
+refactor users service and add migration and fix tests
+fix: rotate refresh token on every refresh call
+
+Long body paragraph with implementation details.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+```
+
+---
+
+## Task Lifecycle
+
+```
+main
+  │
+  ├── feat/FC-2_add_login
+  │       │
+  │       ├── commit
+  │       ├── commit (migration)
+  │       ├── commit
+  │       │
+  │       └── Pull Request
+  │               │
+  │               └── Squash & Merge
+  │
+main
+```
+
+---
+
+## Quick Process
+
+```
+main
+   │
+   ├── git pull
+   │
+   ├── git checkout -b feat/FC-2_add_login
+   │
+   ├── development (+ migration)
+   │
+   ├── git fetch
+   ├── git rebase origin/main
+   ├── npm run db:migrate && npm run verify
+   │
+   ├── push
+   │
+   ├── Pull Request
+   │
+   ├── Code Review
+   │
+   └── Squash and Merge → main
+```
+
+---
+
+## Before Large Changes
+
+Before significant refactoring:
+
+Check:
+
+- current git status
+- affected files
+- existing changes
+- pending migrations on the branch and on `main`
+
+Avoid modifying unrelated files.
+
+---
+
+## Git Status
+
+Before completing a task:
+
+Verify:
+
+- only expected files changed
+- no temporary files added
+- no generated artifacts committed (`dist/`, `coverage/`, local storage dirs, dumps)
+- no `.env` or credentials files
+- the generated ORM client is committed or ignored per project decision, consistently
+
+---
+
+## AI Generated Changes
+
+Before suggesting commit:
+
+Check:
+
+- TypeScript errors
+- architecture compliance
+- formatting
+- changed files
+- migration present if the schema changed, and not edited if already applied
+- message is one line, max 70 characters, format `<type>: <description>`
+- no body, no `Co-authored-by`, `Authored-by`, or other trailers
+
+---
+
+## Refactoring
+
+Before large refactoring:
+
+Analyze:
+
+- git history
+- existing patterns
+- affected modules
+
+Do not remove code without understanding its purpose.
+
+---
+
+## Branch Awareness
+
+Respect current branch.
+
+Do not:
+
+- change branches
+- reset changes
+- rewrite history
+
+without explicit instruction.
+
+---
+
+## Dangerous Operations
+
+Never execute automatically:
+
+- `git reset --hard`
+- `git clean`
+- force push
+- history rewrite
+- a migration rollback or `db:reset` against any database other than your local one
+
+---
+
+## AI Rules
+
+Use Git as additional context.
+
+Do not treat Git history as more important than current architecture.
+
+Current project rules always win.

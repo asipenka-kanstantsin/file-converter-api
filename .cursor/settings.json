@@ -1,0 +1,14 @@
+{
+  "cursor.general.enableAutoRules": true,
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit"
+  },
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "files.exclude": {
+    "**/coverage": true,
+    "**/dist": true,
+    "**/node_modules": true
+  }
+}

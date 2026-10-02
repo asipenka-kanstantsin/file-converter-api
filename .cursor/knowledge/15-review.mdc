@@ -1,0 +1,338 @@
+---
+description: Backend code review checklist — layering, contract, database, security, side effects, tests, performance
+alwaysApply: false
+---
+
+# Code Review Knowledge
+
+## General
+
+Every change is reviewed before it is considered complete — by a human, by the Skeptic step of a
+workflow, or both.
+
+The goal of review:
+
+- correctness
+- a stable HTTP contract
+- a safe schema and safe migrations
+- security
+- architecture compliance
+- maintainability
+
+Review the diff **and** what the diff does not show: the migration it needs, the error code it
+forgot to localise, the index a new filter requires, the consumer of a field it renamed.
+
+---
+
+## Architecture Review
+
+Check that:
+
+- new code lives in the correct top-level folder (`config`, `common`, `infrastructure`, `modules`).
+- dependency direction holds: `config ← common ← infrastructure ← modules`.
+- inside a module the chain is `Controller → Service → Repository → ORM`.
+- another module is used only through its `index.ts` and exported service.
+- existing modules, helpers and patterns are reused.
+
+Reject:
+
+- ORM calls in a controller or service (outside `infrastructure/database` and repositories)
+- business rules in a controller, `common/` or `infrastructure/`
+- imports of another module's repository, entity, mapper or DTO internals
+- `forwardRef`, new top-level folders, a generic `BaseService`/`BaseRepository` that did not exist
+
+Full rules: `01-architecture.mdc`.
+
+---
+
+## TypeScript Review
+
+Check that:
+
+- strict typing is preserved; `npm run typecheck` is clean.
+- no `any`, no `as` casts of request bodies, ORM JSON columns, third-party responses or env.
+- no non-null `!` on external data.
+- exported functions and service methods have explicit return types.
+- status and role values are string unions or enums, not free `string`.
+
+Reject:
+
+- `@ts-ignore`, `@ts-nocheck`, `eslint-disable` without a reason on the same line
+- `Record<string, any>`, `object`, `Function`
+
+Full rules: `02-typescript.mdc`.
+
+---
+
+## NestJS Review
+
+Check that:
+
+- providers are injected through the constructor, never created with `new`.
+- a module exports only what other modules need.
+- guards, pipes, filters and interceptors are the global ones unless there is a stated reason.
+- no `@Res()` unless streaming; the controller returns a value and Nest serialises it.
+- lifecycle hooks (`onModuleInit`, `onApplicationShutdown`) close what they open.
+
+Reject:
+
+- static mutable state, module-level singletons holding request data
+- `console.log` (use the injected logger)
+
+Full rules: `03-nestjs.mdc`.
+
+---
+
+## Contract Review
+
+The OpenAPI contract is the contract (`05-api-design.mdc`). Check that:
+
+- every endpoint is in `openapi/openapi.yaml` (changed in this PR before the code) and has a zod request DTO and response DTO that match it; `npm run openapi:lint` is clean.
+- path, method and success status follow the table in `05-api-design.mdc`.
+- casing is the project casing; dates ISO UTC; money in minor units.
+- entities never leave a controller; a mapper produces the response DTO.
+- every error the endpoint can return is listed with `x-error-codes` in `openapi/openapi.yaml`.
+- lists are cursor-paginated `{ items, nextCursor }`, `limit` capped at 100, `sort` whitelisted, backed by a `(sort, id)` index.
+- optional vs nullable is deliberate and documented.
+
+Reject:
+
+- a renamed or removed field, a changed type, status or error code that is not listed under
+  "Contract changes" in the PR
+- a response field that exists only because the entity has it
+- an unbounded list
+
+---
+
+## Validation Review
+
+Check that:
+
+- all input (body, query, params, headers the handler reads) passes through a zod DTO.
+- strings are trimmed and length-capped; emails normalised; ids validated as UUID.
+- unknown keys are handled per project decision (strip or reject), consistently.
+
+Reject:
+
+- `class-validator`, manual `if (!body.x)` checks in controllers
+- validation that differs from the AC limits without a note
+
+Full rules: `06-validation.mdc`.
+
+---
+
+## Errors Review
+
+Check that:
+
+- failures are thrown as `AppException(ErrorCode.X, status, context?)`.
+- a new code is in the enum, in **every** locale catalogue, on the endpoint's `x-error-codes` in `openapi/openapi.yaml`,
+  and asserted by a test.
+- DB constraint violations are mapped by constraint name, not by parsing messages.
+- `context` carries only safe, typed data.
+
+Reject:
+
+- `new HttpException("text")`, bare `NotFoundException()`, raw `Error` reaching the client
+- a reused code with a new meaning
+- a catch that swallows an error or converts everything to 500
+
+Full rules: `08-errors.mdc`.
+
+---
+
+## Database Review
+
+Check that:
+
+- a schema change ships with a generated migration in the same PR.
+- the migration is safe on a populated table (nullable → backfill → constrain; concurrent index
+  creation on large tables; no table rewrite in a hot path).
+- no applied migration was edited.
+- the down path is present or the migration is explicitly marked irreversible.
+- every new foreign key and every column used in a list `WHERE`/`ORDER BY` has an index.
+- more than one write in an operation runs in one transaction, started in the service.
+- names follow `04-database.mdc`: snake_case, plural tables, uuid `id`, `created_at`/`updated_at`
+  timestamptz.
+
+Reject:
+
+- `synchronize: true` / `prisma db push` against a shared database
+- raw SQL built by string concatenation
+- a unique rule enforced only in code (race) instead of a unique constraint
+
+Full rules: `07-database-*.mdc`.
+
+---
+
+## Security Review
+
+Check that:
+
+- every new route is behind the global guard, or `@Public()` is explicit and justified.
+- the service checks ownership or role on the **row**, not only a guard on the route.
+- unsafe methods require CSRF when authenticated by cookie.
+- auth, OTP, password reset and mail-sending endpoints are rate-limited.
+- passwords argon2id; OTPs and magic-link tokens stored hashed; **no refresh-token state stored**; constant-time comparison.
+- public auth endpoints do not reveal whether an email exists unless the AC requires it.
+- uploads: size limit, MIME sniffed from content, server-generated key, private by default.
+
+Reject:
+
+- secrets, tokens, passwords, OTPs, full emails or file contents in logs, errors or responses
+- stack traces, SQL or ORM messages in a response body
+- an IDOR: an id from the request used without an ownership check
+
+Full rules: `09-auth.mdc`, `19-security.mdc`.
+
+---
+
+## Side Effects Review
+
+Check that:
+
+- mail, webhooks, third-party calls and other external effects are enqueued through the outbox in
+  the same transaction as the business write — never inline in the request.
+- the payload is idempotent (idempotency key, unique index) and safe to retry.
+- the endpoint returns without waiting for the external system (202 when the work is queued).
+- files go through `StoragePort`; nothing outside `infrastructure/storage` imports an SDK.
+
+Reject:
+
+- `await mail.send()` or an HTTP call to a third party inside a request handler
+- side effects that fire before the transaction commits
+
+Full rules: `11-mail.mdc`, `12-storage.mdc`, `20-jobs.mdc`.
+
+---
+
+## Configuration Review
+
+Check that:
+
+- a new env var is in the zod env schema, in `AppConfig`, in `.env.example`, and documented.
+- `process.env` is read only in `src/config`.
+- defaults are intentional; secrets have no default.
+
+Full rules: `10-config.mdc`.
+
+---
+
+## Localization Review
+
+Check that:
+
+- error `detail` and mail text come from catalogues selected by locale, never hardcoded.
+- every new key exists in every supported locale (the parity test passes).
+- mail uses the recipient's stored locale, not the request's.
+
+Full rules: `13-i18n.mdc`.
+
+---
+
+## Logging Review
+
+Check that:
+
+- logs are structured (pino), carry the request id, and use the right level.
+- no PII: emails masked, no tokens, codes, links, bodies, headers with credentials.
+- 5xx are logged once, with the error, at `error`.
+
+Full rules: `14-logging.mdc`.
+
+---
+
+## Testing Review
+
+Check that:
+
+- every behaviour change ships with a test that fails without it.
+- unit specs are colocated as `src/**/*.spec.ts`; e2e specs in `test/**/*.e2e-spec.ts` run against
+  a real Postgres.
+- only external boundaries are mocked (SMTP transport, storage driver, third-party HTTP). An e2e
+  test never mocks a repository.
+- error paths are tested: the status **and** the `code`.
+- a bugfix has a regression test reproducing the report.
+- the coverage threshold did not go down.
+
+Full rules: `18-testing.mdc`.
+
+---
+
+## Performance Review
+
+Check that:
+
+- list endpoints run a bounded number of queries regardless of page size (no N+1).
+- only needed columns and relations are loaded.
+- new filters and sorts are backed by an index; check the plan with `EXPLAIN ANALYZE` when the
+  table is large or the query is new.
+- no work in a request that belongs in a job (bulk mail, exports, recomputation).
+- no unbounded in-memory aggregation of rows.
+
+Do not optimise prematurely. A measured slow query is a defect; a hypothetical one is a note.
+
+Prompt: `.cursor/prompts/debug/slow-query.md`.
+
+---
+
+## Code Quality Review
+
+Check that:
+
+- names are meaningful and follow `21-naming.mdc`; files kebab-case with Nest suffixes.
+- imports are absolute (`@/…`) and follow `22-imports.mdc`.
+- object keys and interface members are sorted (perfectionist).
+- files and methods are focused; no dead code.
+- comments explain why, not what; no redundant comments, section banners or commented-out code.
+
+---
+
+## Review Output
+
+When reviewing code:
+
+1. Identify critical issues first (security, data loss, contract break, unsafe migration).
+2. Explain the reason.
+3. Suggest a concrete fix.
+4. Do not suggest unnecessary refactoring.
+
+Severity:
+
+| Level | Examples |
+| --- | --- |
+| Critical | IDOR, secret in logs, unsafe or edited migration, silent contract break, mail sent inline, 500 on a valid request |
+| Medium | missing index on a new filter, missing error code in a locale, N+1 on a list, missing test for an error path |
+| Low | naming, ordering, minor duplication |
+
+---
+
+## Pull Request Review
+
+Before opening or approving a PR:
+
+- branch is created from `main` with correct naming
+- branch is rebased on `origin/main`
+- `npm run verify` passes and CI is green
+- migrations are in the PR and were run against a fresh and a populated database
+- "Contract changes" and "Schema changes" sections are filled (or say "none")
+- no temporary or debug code
+- merge uses Squash and Merge only
+
+Full Git rules: `.cursor/knowledge/16-git.mdc`.
+
+---
+
+## AI Rules
+
+Before finalizing generated code:
+
+- verify layering and module boundaries
+- verify types
+- verify the `openapi/openapi.yaml` diff and the contract tests for changed endpoints
+- verify migrations and indexes
+- verify auth and ownership checks
+- verify localization of new codes and mail keys
+- verify tests exist for new behaviour
+
+Generated code should be ready for production review.

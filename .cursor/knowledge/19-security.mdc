@@ -1,0 +1,115 @@
+---
+description: Security — OWASP API Top 10 applied to this stack, headers, CORS, CSRF, secrets, uploads, review checklist
+alwaysApply: false
+---
+
+# Security Knowledge
+
+Always-apply summary: `.cursor/rules/03-security.mdc`. Auth mechanics: `09-auth.mdc`.
+
+## OWASP API Top 10 here
+
+| Risk | Rule in this codebase |
+| --- | --- |
+| API1 BOLA | Every id from the client is checked against the caller **in the service**: `findOneForOwner(id, userId)` in the repository query, not load-then-compare-later. Not yours → 404 `<ENTITY>_NOT_FOUND` (existence is a leak); visible but not allowed → 403 |
+| API2 Broken auth | Short access JWT + rotating refresh JWT (no server-side refresh state — `09-auth`); `token_version` revokes on deletion/reset/block; OTP and magic-link tokens single-use, hashed, expiring; lockout (423) after 5 wrong codes |
+| API3 Property-level (mass assignment + exposure) | Request DTOs list writable fields; update DTOs use `.strict()` (unknown key → 400) or explicit `.pick()`; `role`, `ownerId`, `status`, `verified` are never client-writable. Responses go through response DTOs + mappers only |
+| API4 Resource consumption | Pagination max 100; body size limit in `main.ts` (e.g. 1 MB JSON); upload limits per purpose; query timeouts; throttler |
+| API5 Function-level auth | `PermissionGuard` global; admin controllers under `/api/admin/*`, every route with `@RequirePermission(…)`; e2e asserts 403 for a user without the grant |
+| API6 Business flows | Rate/usage limits on flows that cost money or send mail; idempotency keys on retries |
+| API7 SSRF | The server does not fetch user-supplied URLs. If a feature needs it: host allowlist, https only, resolve and reject private/link-local ranges, no redirects, timeout, size cap |
+| API8 Misconfiguration | helmet, strict CORS, no stack traces, `x-powered-by` off |
+| API9 Inventory | `openapi/openapi.yaml` is the inventory; the route-inventory test fails on any route outside it |
+| API10 Unsafe consumption | Responses from third parties are zod-parsed before use; timeouts and circuit on every outbound call |
+
+## Rate limiting
+
+`@nestjs/throttler`, global default (e.g. 100/min per IP+user), stricter named limits:
+
+| Endpoint group | Limit (starting point) |
+| --- | --- |
+| login, sign-up | 5/min per IP and per email hash |
+| OTP verify / resend | 5 attempts per code, resend windowed per account |
+| password reset, any mail-sending endpoint | 3/15 min per account + per IP |
+
+429 `RATE_LIMITED` with `context.retryAfter` and a `Retry-After` header. Behind a proxy, set
+`trust proxy` to the exact hop count so the client IP is not spoofable via `X-Forwarded-For`.
+With more than one instance, the throttler storage must be shared (Postgres table or a
+Redis-backed store if Redis is ever introduced).
+
+## Injection
+
+- ORM query builders and parameterised raw queries (`$queryRaw` tagged template / TypeORM
+  parameters) only. `$queryRawUnsafe` / string-concatenated SQL is forbidden.
+- `sort`/`order` from a whitelist, never a column name from input.
+- No `eval`, no user input in `RegExp` without escaping, no shelling out with input.
+
+## HTTP hardening
+
+```ts
+app.use(helmet());                                  // HSTS, nosniff, frame-ancestors none…
+app.enableCors({ credentials: true, origin: config.cors.origins }); // explicit list, never "*"
+app.getHttpAdapter().getInstance().disable("x-powered-by");
+```
+
+- Cookies: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path` scoped (refresh cookie on the refresh
+  route only), `__Host-` prefix where the domain allows.
+- CSRF: double-submit (`csrf_token` cookie + `X-CSRF-Token` header) on every unsafe method for
+  cookie-authenticated requests; compared in constant time.
+- API responses: `Cache-Control: no-store` on authenticated routes.
+
+## Secrets
+
+- From env/secret manager into `AppConfig`; `.env` files are gitignored, `.env.example` has
+  placeholders only. Startup fails on a missing secret.
+- JWT and HMAC secrets ≥ 32 random bytes; rotation plan documented (support old + new key window).
+- Never in logs, errors, OpenAPI examples or test fixtures committed with real values.
+
+## Credentials and comparisons
+
+- Passwords: argon2id; policy = min length (≥ 10–12), max length (≤ 128, bounds hashing cost),
+  check against a breached/common list if the AC asks; no composition rules beyond that.
+- Tokens, OTPs, HMAC signatures compared with `crypto.timingSafeEqual` on equal-length buffers.
+- Account enumeration: login returns one `AUTH_INVALID_CREDENTIALS` for unknown email and wrong
+  password; sign-up and reset answer the same way for known and unknown emails (mail tells the
+  owner) unless the AC explicitly requires otherwise. Do dummy hashing on unknown users to equalise
+  timing.
+
+## Files
+
+Magic-byte MIME check, per-purpose allowlist and size, server-generated keys, private bucket,
+downloads streamed through the API after the permission check (no URLs handed out), strip image metadata, `Content-Disposition: attachment` for downloads
+(`12-storage.mdc`). Never serve user uploads from the API origin as `text/html`.
+
+## Dependencies
+
+- `npm audit --omit=dev --audit-level=high` in CI; Dependabot/Renovate on.
+- `package-lock.json` committed; `npm ci` in CI and Docker.
+- New dependency → `.cursor/prompts/setup/add-dependency.md`.
+
+## Logging
+
+Redaction paths and audit events: `14-logging.mdc`. Log security events (failed logins, lockouts,
+role changes, CSRF failures) at `warn` with user id / IP, never with the credential.
+
+## Review checklist
+
+- [ ] New route: `@Public()` intentional? Role guard on admin routes?
+- [ ] Every client-supplied id scoped to the caller in the query; foreign → 404
+- [ ] Update DTO `.strict()` / explicit pick; no privileged field writable
+- [ ] Response DTO omits internal fields (hashes, tokens, internal flags, other users' PII)
+- [ ] Rate limit on auth, OTP, mail-sending and costly endpoints
+- [ ] No raw SQL with interpolation; sort whitelisted
+- [ ] No outbound fetch of a user URL, or allowlisted per API7
+- [ ] Upload: size, magic bytes, allowlist, generated key, private
+- [ ] Secrets only via config; nothing sensitive in logs, errors or responses
+- [ ] Constant-time comparison for tokens and codes
+- [ ] Error bodies: envelope only, no stack/SQL/ORM text
+- [ ] e2e asserts 401, 403/404 and CSRF for the new endpoints
+
+## Don't
+
+- Don't rely on a guard alone for resource ownership.
+- Don't use `origin: true` or `"*"` with credentials.
+- Don't disable CSRF "for this one endpoint" without a reviewed reason.
+- Don't return different errors or timings that reveal whether an account exists.

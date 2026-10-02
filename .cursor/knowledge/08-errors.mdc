@@ -1,0 +1,102 @@
+---
+description: Error codes, AppException, the error envelope and the global filter
+alwaysApply: false
+---
+
+# Errors Knowledge
+
+## The envelope
+
+Every non-2xx response has exactly this shape:
+
+```json
+{
+  "code": "USER_NOT_FOUND",
+  "detail": "User not found.",
+  "context": { "userId": "0190…" }
+}
+```
+
+- `code` — stable UPPER_SNAKE identifier from `ErrorCode`. The client branches on it. Changing a
+  code is a breaking contract change.
+- `detail` — human-readable, **localised by `X-Locale`**. The client may show it; it never parses it.
+- `context` — optional, typed per code, safe to show (limits, retry-after seconds, field names).
+  Never secrets, never internals.
+
+Validation failures (400, decision H3):
+
+```json
+{
+  "code": "VALIDATION_FAILED",
+  "detail": "Some fields are invalid.",
+  "context": {
+    "fields": [{ "path": "email", "code": "invalid_email", "detail": "Enter a valid email." }]
+  }
+}
+```
+
+## ErrorCode
+
+One enum for the whole app, `src/common/errors/error-code.ts`:
+
+```ts
+export enum ErrorCode {
+  AUTH_FORBIDDEN = "AUTH_FORBIDDEN",
+  AUTH_INVALID_CREDENTIALS = "AUTH_INVALID_CREDENTIALS",
+  AUTH_OTP_EXPIRED = "AUTH_OTP_EXPIRED",
+  AUTH_OTP_INVALID = "AUTH_OTP_INVALID",
+  AUTH_OTP_LOCKED = "AUTH_OTP_LOCKED",
+  AUTH_REFRESH_INVALID = "AUTH_REFRESH_INVALID",
+  AUTH_UNAUTHENTICATED = "AUTH_UNAUTHENTICATED",
+  CONFLICT = "CONFLICT",
+  CSRF_INVALID = "CSRF_INVALID",
+  FILE_TOO_LARGE = "FILE_TOO_LARGE",
+  FILE_TYPE_NOT_ALLOWED = "FILE_TYPE_NOT_ALLOWED",
+  INTERNAL_ERROR = "INTERNAL_ERROR",
+  RATE_LIMITED = "RATE_LIMITED",
+  USER_NOT_FOUND = "USER_NOT_FOUND",
+  VALIDATION_FAILED = "VALIDATION_FAILED",
+}
+```
+
+- Prefix by domain (`AUTH_`, `USER_`, `FILE_`, …).
+- Adding a code = enum entry + message in **every** locale catalogue + listed in `x-error-codes` of every response in `openapi/openapi.yaml` that
+  endpoint that can return it + a test that asserts it.
+- Never reuse a code for a different meaning.
+
+## Throwing
+
+```ts
+throw new AppException(ErrorCode.USER_NOT_FOUND, HttpStatus.NOT_FOUND, { userId });
+```
+
+- Services throw `AppException`. Never `new HttpException("some text")`, never `NotFoundException()`
+  without a code, never a raw `Error` meant for the client.
+- Repositories return `null` for a missing row; the service decides and throws `…_NOT_FOUND`
+  (repository `find…` → `T | null`, service `get…` → `T` or throws).
+
+## AllExceptionsFilter
+
+Global filter in `common/filters`:
+
+| Caught | Response |
+| --- | --- |
+| `AppException` | its status, code, localised detail, context |
+| `ZodValidationException` | 400 `VALIDATION_FAILED` with `context.fields` |
+| ORM unique violation (Prisma `P2002` / PG `23505`) | 409 with the code mapped per constraint, else `CONFLICT` |
+| ORM FK violation (`P2003` / `23503`) | 409 / 400 per case |
+| ORM not found (`P2025`) | 404 with the entity's code |
+| Throttler | 429 `RATE_LIMITED`, `context.retryAfter` |
+| anything else | 500 `INTERNAL_ERROR`, generic detail, full error **logged** with request id, never returned |
+
+Map DB constraint names to codes explicitly (`users_email_key → USER_EMAIL_TAKEN`); do not rely on
+parsing the ORM message.
+
+## Rules
+
+- A stack trace, SQL, ORM message or file path in a response body is a security defect.
+- 500 in a test run is a defect even if the test "expects an error".
+- Log 4xx at `warn` only when useful (auth failures, rate limits); 5xx always at `error` with the
+  request id.
+- The frontend has a lookup table by `code`; keep codes stable and documented so it never needs to
+  fall back to `detail`.

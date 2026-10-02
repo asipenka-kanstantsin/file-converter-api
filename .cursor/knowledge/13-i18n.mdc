@@ -1,0 +1,33 @@
+---
+description: Localisation — single locale (en), typed error/validation message maps, how to add a second locale
+alwaysApply: false
+---
+
+# i18n Knowledge
+
+The server localises two things: error `detail` (including validation field messages) and mail.
+This project supports **one locale, `en`** (decision H4), so there is no i18n library yet:
+
+- error details: `ERROR_MESSAGES` in `src/common/errors/error-messages.ts`, typed
+  `satisfies Record<ErrorCode, string>` — a code without a message does not compile, and
+  `error-messages.spec.ts` fails on dead entries;
+- validation details: `VALIDATION_MESSAGES` keyed by zod issue code, same file;
+- mail: subject/html/text per template, English only (`11-mail`).
+
+`X-Locale` is accepted in CORS but not read. Adding a second locale is a decision for
+`docs/decisions.md`: introduce `nestjs-i18n` (header resolver `x-locale`, catalogues per locale, a
+parity spec) and move both maps into catalogues in one change.
+
+## Not localised
+
+- `code` values, enum values, status strings, ids, dates (ISO, the client formats them).
+- Taxonomy/reference data stored in the DB — that is content with its own translation columns if
+  the AC requires it, not catalogue text.
+- Log messages, OpenAPI descriptions, admin-only diagnostics.
+
+## Don't
+
+- Don't hardcode user-readable strings in services, filters or DTO schemas: error text lives only
+  in `ERROR_MESSAGES` / `VALIDATION_MESSAGES`, mail text only in the templates.
+- Don't put English prose in zod `message:`; custom refinements set a machine code.
+- Don't add a translation mechanism ad hoc; a second locale is a recorded decision first.

@@ -1,0 +1,116 @@
+---
+description: HTTP contract — paths, methods, DTOs, statuses, pagination, OpenAPI
+alwaysApply: false
+---
+
+# API Design Knowledge
+
+The HTTP contract is **written first**, by hand, in `openapi/openapi.yaml` (OpenAPI 3.1). Code
+implements the spec; contract tests prove it. Anything the server does that the spec does not say
+— or anything the spec says that the server cannot do — is a defect.
+
+## Paths
+
+- **Global prefix `/api`** for every route (decision H1, set once in `configureApp`, never
+  repeated in controllers): `@Controller('users')` serves `/api/users`. The only exception is the
+  monitoring endpoint the Notion NFR page names, `/health` (+ `/health/live`, `/health/ready`).
+- Below the prefix, the Notion paths verbatim: `/api/auth/*`, `/api/users/{userId}`,
+  `/api/admin/*`, `/api/convert`, `/api/images/convert`, `/api/transformations/history`. Notion's
+  `/api/convert` is `@Controller('convert')`, not `api/convert`.
+- Plural nouns, kebab-case for paths Notion does not name: `/api/admin/settings`.
+- Actions that are not CRUD: a sub-resource verb, `POST /api/users/{userId}/email-change`.
+
+## Methods and statuses
+
+| Operation | Method | Success |
+| --- | --- | --- |
+| Read one / list | GET | 200 |
+| Create | POST | 201 + body |
+| Partial update | PATCH | 200 + body |
+| Replace | PUT | 200 + body |
+| Delete | DELETE | 204 |
+| Action | POST | 200 + body, or 202 if work is queued |
+
+Errors: 400 malformed, 401 unauthenticated, 403 authenticated but not allowed, 404 not found (also
+used instead of 403 when revealing existence is itself a leak), 409 state conflict, 400 validation
+failed (`VALIDATION_FAILED`, decision H3), 413 payload too large, 415 unsupported media type, 410 gone, 423 locked, 429 rate limited. 500 is never intentional.
+
+## Casing and shapes
+
+- JSON field casing: **camelCase** <!-- project decision; if snake_case, set it once in the zod layer, not per DTO -->.
+- Dates: ISO 8601 UTC strings (`2026-09-28T10:00:00.000Z`); date-only fields `YYYY-MM-DD`.
+- Money: integer minor units + currency code.
+- Enums: lower_snake string unions, listed in the schema.
+- Optional vs nullable are different: absent = not sent, `null` = explicitly empty. Document which.
+- Never return an ORM entity. Every response goes through a response DTO + mapper, so a new
+  column never leaks by accident.
+
+## DTOs
+
+zod schemas via `nestjs-zod`, one file per DTO (`06-validation.mdc`):
+
+```ts
+export const createUserSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  name: z.string().trim().min(1).max(100),
+});
+export class CreateUserDto extends createZodDto(createUserSchema) {}
+```
+
+Response DTOs are zod schemas too, applied with `@ZodSerializerDto(UserResponseDto)`; their shape
+matches the response schema in `openapi/openapi.yaml`.
+
+## Pagination
+
+```
+GET /api/admin/users?limit=20&cursor=eyJ2IjoiMjAyNi0wOS0yOFQxMDowMDowMFoiLCJpZCI6IjAxOTAifQ&sort=createdAt&order=desc
+→ 200 { "items": [...], "nextCursor": "eyJ2Ijoi…" }        // nextCursor null on the last page
+```
+
+- **Cursor pagination everywhere** (Notion pages, decision H2). No `offset`, no `total` — a count
+  per page is an extra query the spec does not ask for.
+- `limit` default 20, max 100, enforced by `CursorPaginationQueryDto`.
+- The cursor is opaque base64url JSON `{ v: <sort value>, id }`, built and parsed only by
+  `common/pagination`. A malformed cursor → 400 `VALIDATION_FAILED`.
+- Order is always `(<sort column>, id)` so pages are stable with equal sort values; the query is
+  `WHERE (sort, id) < (:v, :id)` (or `>` for `asc`) with `take: limit + 1` to detect the next page.
+- `sort` is a whitelist per endpoint, never a raw column name from the client; the cursor encodes
+  `sort` and `order`, so reusing it with different ones → 400.
+
+## Filtering
+
+Explicit query params (`?status=active&createdFrom=…`), each validated. No generic filter DSL.
+
+## OpenAPI — contract-first
+
+- `openapi/openapi.yaml` is the single source of the contract: paths, parameters, request bodies
+  (JSON and `multipart/form-data`), every response status with its schema and headers
+  (`Set-Cookie`, `Content-Disposition`), cookie security scheme, shared components (error
+  envelope, cursor page, `VALIDATION_FAILED` fields).
+- Change the spec **before** the code, in the same PR. A PR that changes behaviour without a spec
+  diff is incomplete.
+- Every error response lists the codes it can carry: `x-error-codes: [USER_NOT_FOUND]`.
+- `operationId` = `<controller>_<method>` (camelCase), stable, used by contract tests.
+- `npm run openapi:lint` (Redocly CLI) runs in `verify`.
+- The app serves the file read-only and public at `GET /api/openapi.yaml` and `GET /api/openapi.json`
+  (Notion NFR: "OpenAPI — актуальная документация"). No Swagger UI, no `@nestjs/swagger`, no
+  `@Api*` decorators.
+- zod DTOs mirror the spec by hand; drift is caught by the contract tests (`18-testing`), not by a
+  generator.
+
+## Contract changes
+
+A change is **breaking** if it removes or renames a field, changes a type, adds a required request
+field, changes a status or an error code. Breaking changes:
+
+1. are called out in the PR description under "Contract changes";
+2. are coordinated with the frontend before merge;
+3. never ship silently in a "fix".
+
+Adding an optional response field or a new endpoint is non-breaking but still listed.
+
+## Idempotency
+
+- PUT / DELETE are idempotent by definition.
+- A POST that charges money or sends mail accepts an `Idempotency-Key` header when the AC allows
+  retries.

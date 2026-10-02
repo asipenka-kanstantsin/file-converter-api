@@ -1,0 +1,117 @@
+---
+description: Naming of files, classes, DTOs, methods, DB objects, error codes, env vars, branches
+alwaysApply: false
+---
+
+# Naming Knowledge
+
+Names describe purpose. No abbreviations except universal ones (`id`, `url`, `dto`, `otp`, `jwt`).
+Follow the closest existing module over this file when they differ.
+
+## Files and folders
+
+kebab-case, with the Nest role suffix. Module folders are plural domain nouns.
+
+| Thing | File | Class / export |
+| --- | --- | --- |
+| Module | `users.module.ts` | `UsersModule` |
+| Controller | `users.controller.ts` | `UsersController` |
+| Service | `users.service.ts` | `UsersService` |
+| Repository | `users.repository.ts` | `UsersRepository` |
+| Mapper | `users.mapper.ts` | `toUserResponse()` (functions) |
+| Domain types | `users.types.ts` | `User`, `UserStatus` |
+| DTO | `dto/create-user.dto.ts` | `createUserSchema`, `CreateUserDto`, `CreateUserInput` |
+| TypeORM entity | `user.entity.ts` | `UserEntity` |
+| Guard | `jwt-auth.guard.ts` | `JwtAuthGuard` |
+| Decorator | `current-user.decorator.ts` | `CurrentUser` |
+| Interceptor / filter / pipe | `request-id.interceptor.ts`, `all-exceptions.filter.ts` | `RequestIdInterceptor`, `AllExceptionsFilter` |
+| Port / adapter | `storage.port.ts`, `s3-storage.adapter.ts` | `StoragePort`, `S3StorageAdapter` |
+| Unit test | `users.service.spec.ts` | — |
+| e2e test | `test/users/list-users.e2e-spec.ts` | — |
+| Migration | generated name + snake/pascal description | `add_user_status` / `AddUserStatus` |
+
+One exported class per file. Helper functions may share a file with the thing they serve.
+
+## DTOs
+
+| Purpose | Class | Schema const |
+| --- | --- | --- |
+| Create body | `CreateUserDto` | `createUserSchema` |
+| Update body | `UpdateUserDto` | `updateUserSchema` |
+| Action body | `PublishAssignmentDto` | `publishAssignmentSchema` |
+| List query | `ListUsersQueryDto` | `listUsersQuerySchema` |
+| Path params | `IdParamDto`, `UserSessionParamsDto` | `idParamSchema` |
+| Single response | `UserResponseDto` | `userResponseSchema` |
+| List response | `UserListResponseDto` | `userListResponseSchema` (= `paginatedSchema(userResponseSchema)`) |
+
+Inferred input types drop `Dto`: `CreateUserInput`, `ListUsersQuery`, `UserResponse`.
+
+## Methods
+
+| Layer | Name | Meaning |
+| --- | --- | --- |
+| Repository | `findById`, `findByEmail` | returns `T \| null` |
+| Repository | `list(filter, page)` | returns `{ items, nextCursor }` |
+| Repository | `create`, `update`, `delete`, `exists…` | plain persistence |
+| Service | `getById` | returns `T`, throws `…_NOT_FOUND` |
+| Service | `list`, `create`, `update`, `delete` | CRUD use cases |
+| Service | verb for actions: `publish`, `archive`, `verifyEmail`, `rotateRefreshToken` | business operations |
+| Controller | same name as the service method it calls | — |
+| Mapper | `toUser(row)`, `toUserResponse(user)` | pure |
+
+- `find…` may return nothing; `get…` must return or throw. Never mix.
+- Booleans: `is…`, `has…`, `can…`, `should…` (`isVerified`, `canPublish`).
+- Event handlers / outbox consumers: `on<Event>` (`onUserRegistered`).
+- No `handle()`, `process()`, `doStuff()`, `data`, `info`, `manager` as names.
+
+## Types and constants
+
+- Types, interfaces, classes, enums: PascalCase, no `I` prefix, no `Interface`/`Type` suffix.
+- Global constants and value tuples: UPPER_SNAKE (`USER_STATUSES`, `MAX_UPLOAD_BYTES`).
+- Metadata keys: UPPER_SNAKE (`IS_PUBLIC_KEY`, `ROLES_KEY`).
+- Injection tokens for non-class providers: UPPER_SNAKE symbols (`MAIL_TRANSPORT`).
+
+## Database
+
+| Object | Convention | Example |
+| --- | --- | --- |
+| Table | snake_case, plural | `users`, `challenges`, `transformations` |
+| Join table | both plural names, alphabetical | `roles_users` or a named concept `memberships` |
+| Column | snake_case | `password_hash`, `company_id` |
+| Primary key | `id` (uuid) | — |
+| Foreign key column | `<singular>_id` | `user_id` |
+| Timestamps | `created_at`, `updated_at`, `<event>_at` | `verified_at`, `deleted_at` |
+| Booleans | `is_…` / `has_…` | `is_primary` |
+| Unique constraint | `<table>_<cols>_key` | `users_email_key` |
+| Index | `<table>_<cols>_idx` | `users_company_id_idx` |
+| Foreign key | `<table>_<col>_fkey` | `users_company_id_fkey` |
+| Enum type | snake_case singular | `user_status` |
+| Enum values | lower_snake | `pending_verification` |
+
+These match Postgres/Prisma defaults, so constraint names are predictable in the error filter.
+
+## API
+
+- Paths: plural kebab-case nouns (`/api/saved-searches`), actions as sub-resource verbs
+  (`/api/assignments/{id}/publish`) — `05-api-design`.
+- JSON fields camelCase; query params camelCase; enum values lower_snake.
+- Headers: `X-CSRF-Token`, `X-Locale`, `X-Request-Id`.
+- Cookies: snake_case (`access_token`, `refresh_token`, `csrf_token`).
+
+## Error codes
+
+UPPER_SNAKE, `<DOMAIN>_<CONDITION>`, key equals value in `ErrorCode`:
+`USER_NOT_FOUND`, `USER_EMAIL_TAKEN`, `AUTH_OTP_LOCKED`, `FILE_TOO_LARGE`. Generic codes without a
+prefix are reserved: `VALIDATION_FAILED`, `RATE_LIMITED`, `CONFLICT`, `INTERNAL_ERROR`,
+`CSRF_INVALID`. Validation issue codes and i18n keys are lower_snake.
+
+## Environment variables
+
+UPPER_SNAKE, prefixed by config group: `APP_`, `AUTH_`, `DATABASE_URL`, `MAIL_`/`SMTP_`,
+`STORAGE_`/`S3_`, `LOG_`. Units in the name: `AUTH_ACCESS_TTL_SECONDS`, `MAIL_TIMEOUT_MS`,
+`STORAGE_MAX_UPLOAD_BYTES`.
+
+## Git
+
+- Branch: `<type>/<TASK-ID>_<short_description>` — `feat/FC-2_password_reset`.
+- Commit: `<type>: <description>`, one line, max 70 chars — `16-git`.

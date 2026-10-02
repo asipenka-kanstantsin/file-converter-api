@@ -1,0 +1,104 @@
+---
+description: Modular monolith layout, layering and module boundaries
+alwaysApply: false
+---
+
+# Architecture Knowledge
+
+## Shape
+
+A modular monolith: one deployable NestJS app, split into business modules with hard boundaries,
+so any module can later be extracted without untangling imports.
+
+```
+src/
+  main.ts
+  app.module.ts
+  config/                 env schema (zod), AppConfig, AppConfigModule
+  common/
+    errors/               ErrorCode enum, AppException, error envelope types
+    filters/              AllExceptionsFilter
+    guards/               JwtAuthGuard, PermissionGuard, CsrfGuard, ThrottlerGuard wiring
+    decorators/           @Public(), @RequirePermission(), @CurrentUser()
+    interceptors/         request id, logging context
+    pagination/           PaginationQueryDto, paginated() helper, Paginated<T>
+    i18n/                 locale resolution from X-Locale, message catalogues
+    utils/
+  infrastructure/
+    database/             PrismaService | TypeORM DataSource, transaction helper, migrations
+    mail/                 MailService, SMTP transport, templates
+    storage/              StoragePort + s3 / local adapters
+    outbox/               outbox table, dispatcher worker
+  modules/
+    auth/
+    users/
+    <domain>/
+test/
+  helpers/                app factory, db reset, auth helper, mail sink reader
+  <domain>/*.e2e-spec.ts
+```
+
+## Dependency direction
+
+```
+config  ←  common  ←  infrastructure  ←  modules
+```
+
+An arrow points at what may be imported. `common` never imports `infrastructure` or `modules`;
+`infrastructure` never imports `modules`. Enforced by the `no-restricted-imports` layer rules in
+`eslint.config.mjs`.
+
+## A module
+
+```
+modules/users/
+  users.module.ts
+  users.controller.ts          HTTP
+  users.service.ts             business rules
+  users.repository.ts          ORM access
+  users.mapper.ts              entity → response DTO
+  dto/
+    create-user.dto.ts
+    update-user.dto.ts
+    user-response.dto.ts
+    list-users-query.dto.ts
+  users.types.ts               domain types, status unions
+  users.service.spec.ts
+  index.ts                     public API: the module and the exported service/types
+```
+
+Other modules import `@/modules/users` (the `index.ts`) and nothing deeper.
+
+### Layers
+
+| Layer | May | May not |
+| --- | --- | --- |
+| Controller | route, guards, `@Body()`/`@Query()` DTOs, call **one** service method, map response | business rules, ORM, try/catch that swallows errors |
+| Service | rules, ownership checks, transactions, call repositories and other modules' services, enqueue outbox events | know about `Request`/`Response`, cookies, HTTP status codes other than via `AppException` |
+| Repository | ORM queries, return domain types | business decisions, throwing HTTP-flavoured errors except `NOT_FOUND` mapping when agreed |
+| Mapper | pure functions entity → DTO | I/O |
+
+### Cross-module calls
+
+- Call the other module's **exported service**. Never its repository.
+- Need data from two modules in one transaction → the transaction is started by the calling
+  service and passed down (see `07-database-*.mdc` → Transactions).
+- Reacting to something another module did → an outbox/domain event, not a direct call back.
+- A cycle between two modules means one of them owns something it should not. Move it; do not
+  `forwardRef`.
+
+## What goes where
+
+| Thing | Location |
+| --- | --- |
+| New business capability | `modules/<domain>` |
+| Talking to an external system (SMTP, S3, payment provider, third-party API) | `infrastructure/<system>` behind an interface |
+| Something every module uses and that has no business meaning | `common/` |
+| Env var | `config/env.schema.ts` + `AppConfig` |
+
+## Rules
+
+- No new top-level folders.
+- No generic `BaseService` / `BaseRepository` unless one already exists.
+- One module per business domain, not per table.
+- Controllers stay thin enough that an e2e test is the only test they need.

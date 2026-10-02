@@ -1,0 +1,142 @@
+---
+description: nestjs-zod request, query, param and response DTOs, normalising, limits, 400 mapping
+alwaysApply: false
+---
+
+# Validation Knowledge
+
+zod is the only validator. DTO classes come from `createZodDto`; the global `ZodValidationPipe`
+(`APP_PIPE`) parses every `@Body()`, `@Query()` and `@Param()` typed with one. No
+`class-validator`, no `class-transformer`, no manual `schema.parse` in controllers.
+
+## Files
+
+One DTO per file in `modules/<domain>/dto/`, schema and class side by side:
+
+```ts
+export const createUserSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  name: z.string().trim().min(1).max(100),
+  role: userRoleSchema.default("member"),
+});
+export class CreateUserDto extends createZodDto(createUserSchema) {}
+export type CreateUserInput = z.infer<typeof createUserSchema>;
+```
+
+The service signature takes `CreateUserInput`, not `CreateUserDto` (`02-typescript`).
+
+## Request bodies
+
+- `z.object` is non-strict by default: unknown keys are **stripped**, not rejected. Keep that
+  default so an additive frontend change is not a 400; use `.strict()` only where an unknown key
+  is a real error (admin bulk operations, webhooks you own).
+- Every string has a `max()`. Every array has a `max()`. Every number has `int()` and bounds when
+  it is a count, a limit or money. There is no unbounded input.
+- Normalise in the schema, once: `trim()` on free text, `toLowerCase()` on emails and slugs,
+  `.transform((s) => s.normalize("NFC"))` where comparison matters.
+- Empty string is not "absent". If the UI sends `""` for "cleared", convert explicitly:
+  `z.string().trim().max(500).transform((s) => (s === "" ? null : s)).nullable()`.
+- PATCH: build from the create schema, then `.partial()`; refuse an empty patch with
+  `.refine((v) => Object.keys(v).length > 0, { message: "empty_patch" })`.
+
+## Query DTOs
+
+Query values arrive as strings. Coerce deliberately:
+
+```ts
+export const cursorPaginationQuerySchema = z.object({
+  cursor: z.string().max(512).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const listUsersQuerySchema = cursorPaginationQuerySchema.extend({
+  includeArchived: z.enum(["true", "false"]).transform((v) => v === "true").default("false"),
+  order: z.enum(["asc", "desc"]).default("desc"),
+  search: z.string().trim().min(1).max(100).optional(),
+  sort: z.enum(["createdAt", "name"]).default("createdAt"),
+  status: userStatusSchema.optional(),
+});
+export class ListUsersQueryDto extends createZodDto(listUsersQuerySchema) {}
+```
+
+- **Never `z.coerce.boolean()`** — `Boolean("false")` is `true`. Use the enum transform above (or
+  `z.stringbool()` on zod 4).
+- `sort` is always a whitelist enum of API field names; the repository maps it to a column.
+- Repeated params (`?status=a&status=b`): `z.preprocess((v) => (Array.isArray(v) ? v : [v]),
+  z.array(statusSchema).max(10))`.
+
+## Params
+
+```ts
+export const idParamSchema = z.object({ id: z.string().uuid() });
+export class IdParamDto extends createZodDto(idParamSchema) {}
+```
+
+A malformed id is a 400 `VALIDATION_FAILED`, not a 500 from the database.
+
+## Reuse
+
+- Build variants with `.pick`, `.omit`, `.extend`, `.partial`, `.merge` from one base schema; do
+  not copy field definitions between DTOs.
+- Shared field schemas (`emailSchema`, `passwordSchema`, `localeSchema`, `idParamSchema`,
+  `cursorPaginationQuerySchema`) live in `common/validation`. Domain field schemas (`userStatusSchema`)
+  live in the owning module and are exported through its `index.ts` if others need them.
+
+## Refinements
+
+- Cross-field rules with `.superRefine`, attaching the issue to the field the user must fix:
+
+```ts
+.superRefine((v, ctx) => {
+  if (v.endsAt <= v.startsAt) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "ends_before_start", path: ["endsAt"] });
+  }
+})
+```
+
+- Refinements are pure: no DB lookups, no async. "Email already taken" is a service rule and a
+  409 with its own `ErrorCode`, not a validation issue.
+- Custom issue `message` is a **machine code** (lower_snake). The filter translates it; never put
+  English prose in a schema.
+
+## Response DTOs and serialization
+
+- Every handler returns through a response schema: `@ZodSerializerDto(UserResponseDto)` with the
+  global `ZodSerializerInterceptor`. Fields not in the schema are stripped, so a new column never
+  leaks.
+- Dates: the schema converts `Date` to ISO strings (`z.date().transform((d) => d.toISOString())`
+  or the project's shared `isoDateTimeSchema`). One helper, used everywhere.
+- Paginated responses use the shared `cursorPageSchema(itemSchema)` → `{ items, nextCursor }`.
+- Mappers (`users.mapper.ts`) build the plain object; the serializer only validates and strips.
+
+## Mapping zod issues to the envelope
+
+`AllExceptionsFilter` turns `ZodValidationException` into 400 (`08-errors`, decision H3):
+
+```ts
+const fields = error.getZodError().issues.map((issue) => {
+  const code = issue.code === "custom" ? issue.message : issue.code;
+  return { code, detail: i18n.t(`validation.${code}`, locale), path: issue.path.join(".") };
+});
+throw new AppException(ErrorCode.VALIDATION_FAILED, HttpStatus.BAD_REQUEST, { fields });
+```
+
+- `path` uses the API field names (dot-joined, array indexes as numbers: `items.0.qty`).
+- `code` is zod's issue code (`too_big`, `invalid_string`, …) or the custom machine code.
+- `detail` comes from the `validation` catalogue in every locale (`13-i18n`); a missing key is a
+  test failure, not a silent fallback.
+- A response-schema failure is **our** bug: log it and return 500 `INTERNAL_ERROR`, never 400.
+
+## Swapping to joi
+
+Only if the project decides so at setup, for the whole codebase: replace `nestjs-zod` with a
+`JoiValidationPipe` on DTO classes, map `ValidationError.details`
+to the same `context.fields` shape, and keep every rule above (limits, normalising, whitelists,
+machine codes). Mixing zod and joi is not allowed.
+
+## Don't
+
+- Don't validate in services what the DTO can express.
+- Don't accept `z.any()`, `z.unknown()` or `z.record(z.string(), z.any())` from a client.
+- Don't reuse a request schema as a response schema.
+- Don't trust `Content-Type`; the pipe validates the parsed body regardless.

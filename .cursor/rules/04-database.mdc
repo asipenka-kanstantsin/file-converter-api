@@ -1,0 +1,17 @@
+---
+description: Database and migration rules
+alwaysApply: true
+---
+
+# Database Rules
+
+Full spec: `.cursor/knowledge/07-database-*.mdc` (only one ORM file exists in a real project).
+
+- Schema changes only through generated migrations, committed with the code that needs them.
+- Never edit a migration that has been applied anywhere shared.
+- Migrations must be safe on a populated table: add nullable → backfill → constrain.
+- More than one write in an operation → one transaction, started in the service.
+- Index every foreign key and every column a list endpoint filters or sorts by.
+- snake_case tables and columns, plural table names, `id` uuid primary keys,
+  `created_at` / `updated_at` as timestamptz.
+- No N+1: load relations explicitly; list endpoints are paginated.

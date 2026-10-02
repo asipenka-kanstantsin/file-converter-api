@@ -1,0 +1,116 @@
+---
+description: The @/ alias, module public APIs, import direction and order, type-only imports
+alwaysApply: false
+---
+
+# Imports Knowledge
+
+## Alias
+
+`@/*` → `src/*`, set in `tsconfig.json` `paths`. Cross-folder imports always use it:
+
+```ts
+import { AppException, ErrorCode } from "@/common/errors";
+import { UsersService } from "@/modules/users";
+```
+
+- Relative imports only inside one module or one `common`/`infrastructure` sub-folder, and never
+  more than one `../` deep.
+- The alias must resolve at runtime and in tests, not only in the editor:
+  - build: `nest build && tsc-alias -p tsconfig.build.json`;
+  - Jest: `moduleNameMapper: { "^@/(.*)$": "<rootDir>/src/$1" }` in both unit and e2e configs.
+
+## Direction
+
+```
+config  ←  common  ←  infrastructure  ←  modules
+```
+
+- `common` imports from `config` only (and external packages).
+- `infrastructure` imports from `common` and `config`.
+- `modules/*` import from `infrastructure`, `common`, `config`, and other modules' **public API**.
+- Nothing imports from `test/`, and `src/` never imports from `prisma/` scripts.
+- Enforced by the `no-restricted-imports` layer rules in `eslint.config.mjs`; a violation fails lint.
+
+## Module public API
+
+Each module has one `index.ts` that exports what other modules may use:
+
+```ts
+// src/modules/users/index.ts
+export { UsersModule } from "./users.module";
+export { UsersService } from "./users.service";
+export type { User, UserRole, UserStatus } from "./users.types";
+export { userStatusSchema, USER_STATUSES } from "./users.types";
+```
+
+- Other modules import `@/modules/users` and nothing deeper. `@/modules/users/users.repository`
+  from outside the module is a boundary violation.
+- Repositories, mappers, entities, controllers and DTOs are **not** exported. Need another
+  module's data shape → export a domain type or a response schema deliberately.
+- Inside a module, files import each other relatively (`./users.repository`), never through the
+  module's own `index.ts` (that creates cycles).
+
+## Barrels in `common` and `infrastructure`
+
+- One `index.ts` per sub-folder that has a public surface: `@/common/errors`,
+  `@/common/decorators`, `@/common/pagination`, `@/infrastructure/mail`,
+  `@/infrastructure/storage`.
+- No root `@/common` barrel that re-exports everything — it drags unrelated code (and its cycles)
+  into every importer.
+- No `export *`; list names explicitly so the public surface is reviewable.
+
+## Import order
+
+Sorted by `perfectionist/sort-imports` (autofixed by `npm run lint:fix`), groups separated by a
+blank line:
+
+1. Node built-ins with the `node:` prefix (`node:crypto`, `node:path`)
+2. External packages (`@nestjs/*`, `zod`, `argon2`, …)
+3. Internal alias `@/…`
+4. Relative (`../`, `./`)
+
+Type-only imports sit in the same group as their source, written with `import type`.
+
+```ts
+import { randomInt } from "node:crypto";
+
+import { HttpStatus, Injectable } from "@nestjs/common";
+import { z } from "zod";
+
+import { AppConfig } from "@/config";
+import { AppException, ErrorCode } from "@/common/errors";
+import { MailService } from "@/infrastructure/mail";
+
+import { UsersRepository } from "./users.repository";
+import type { User } from "./users.types";
+```
+
+## Type-only imports — the Nest trap
+
+Use `import type` for anything used only as a type (`@typescript-eslint/consistent-type-imports`).
+
+**Except** classes Nest needs at runtime through decorator metadata:
+
+- constructor-injected providers (`UsersService`, `AppConfig`, `TransactionHost`);
+- DTO classes in `@Body()`, `@Query()`, `@Param()` parameters;
+- anything referenced by `@ZodSerializerDto()`.
+
+`import type { UsersService }` compiles, then fails at runtime with "Nest can't resolve
+dependencies" or silently skips validation. Configure the lint rule with
+`parserOptions.emitDecoratorMetadata: true` so it does not "fix" these into type imports.
+
+## Cycles
+
+- `import/no-cycle` is on. A cycle is fixed by moving the shared thing down a layer or splitting
+  responsibility, never by `forwardRef` or a lazy `require`.
+- A type needed by two modules and owned by neither usually belongs to a third, lower module or to
+  `common` if it has no business meaning.
+
+## Don't
+
+- Don't deep-import across modules, even "just for a type".
+- Don't import from `dist/` or from a package's internal path (`zod/lib/…`).
+- Don't leave unused imports; lint fails on them.
+- Don't use default imports for project code — named exports only. (External packages that ship
+  only a default export are fine: `import helmet from "helmet"`.)

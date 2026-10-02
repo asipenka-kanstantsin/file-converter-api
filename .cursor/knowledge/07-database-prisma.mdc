@@ -1,0 +1,236 @@
+---
+description: Prisma schema conventions, repositories, transactions, migrations, error mapping
+alwaysApply: false
+---
+
+# Database Knowledge — Prisma
+
+Delete this file or `07-database-typeorm.mdc` at project setup; only one ORM is in use. Written for
+**Prisma 7** (`prisma-client` generator + driver adapter).
+
+## Schema conventions
+
+Models are PascalCase singular in Prisma, tables and columns snake_case plural in Postgres:
+
+```prisma
+model User {
+  id           String     @id @default(uuid(7)) @db.Uuid
+  email        String     @unique(map: "users_email_key") @db.VarChar(254)
+  passwordHash String     @map("password_hash")
+  status       UserStatus @default(pending_verification)
+  companyId    String?    @map("company_id") @db.Uuid
+  company      Company?   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([companyId])
+  @@index([status, createdAt])
+  @@map("users")
+}
+
+enum UserStatus {
+  active
+  pending_verification
+  suspended
+
+  @@map("user_status")
+}
+```
+
+- Every field with a camelCase name has `@map("snake_case")`; every model has `@@map("plural")`.
+- Ids: `@default(uuid(7)) @db.Uuid` (or `uuid(4)` if the project chose v4). Never autoincrement.
+- Every `DateTime` is `@db.Timestamptz(3)`; plain `timestamp` is a defect.
+- Name unique constraints explicitly (`map:`) — the error filter maps constraint names to codes.
+- Every relation field has an `@@index`; Prisma does not create FK indexes for you.
+- Enum values are lower_snake and equal the domain `as const` tuple; the repository mapping
+  (`status: row.status` typed as the domain union) fails to compile if they drift.
+- `onDelete` is always explicit (`Restrict` by default, `Cascade` only for owned children).
+- Money: `Int`/`BigInt` minor units. Never `Float`/`Decimal` for money.
+
+## Prisma 7 setup
+
+Prisma 7 has no Rust engine and no implicit env loading: the client talks to Postgres through a
+driver adapter, and the CLI reads `prisma.config.ts`.
+
+```prisma
+// prisma/schema.prisma
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+```
+
+```ts
+// prisma.config.ts — CLI only (migrate, generate, seed); the app never imports it
+import "dotenv/config";
+import { defineConfig, env } from "prisma/config";
+
+export default defineConfig({
+  datasource: { url: env("DATABASE_URL") },
+  migrations: { path: "prisma/migrations", seed: "ts-node prisma/seed.ts" },
+  schema: "prisma/schema.prisma",
+});
+```
+
+- The generated client lives in `src/generated/prisma` (git-ignored, excluded from lint and
+  coverage) and is imported from there, not from `@prisma/client`.
+- `migrate dev` no longer runs `generate` or the seed. `postinstall: prisma generate` keeps the
+  client fresh after `npm ci`; run `npx prisma generate` after every schema edit.
+- `prisma.config.ts` is the one file outside `src/config` that may read env — the Prisma CLI loads
+  it before any app code exists. It must not import from `src/`.
+- Pin `prisma`, `@prisma/client` and `@prisma/adapter-pg` to the **same** exact version; the npm
+  `latest` tag has pointed at a Prisma 8 prerelease.
+
+## PrismaService
+
+```ts
+@Injectable()
+export class PrismaService extends PrismaClient implements OnModuleDestroy, OnModuleInit {
+  constructor(config: AppConfig) {
+    super({
+      adapter: new PrismaPg({ connectionString: config.db.url }),
+      log: [{ emit: "event", level: "warn" }],
+    });
+  }
+  async onModuleInit(): Promise<void> { await this.$connect(); }
+  async onModuleDestroy(): Promise<void> { await this.$disconnect(); }
+}
+```
+
+`PrismaClient` comes from `@/generated/prisma/client`, `PrismaPg` from `@prisma/adapter-pg`. The
+pool belongs to the adapter; pool size goes through the connection string or `PrismaPg` options.
+Lives in `infrastructure/database`, exported by a `@Global()` `DatabaseModule`. Only repositories
+use it — through the transaction host below.
+
+## Transactions — `@nestjs-cls/transactional`
+
+The Prisma adapter keeps the active transaction client in CLS, so repositories do not take a `tx`
+argument and services do not know about Prisma:
+
+```ts
+ClsModule.forRoot({
+  global: true,
+  middleware: { mount: true },
+  plugins: [new ClsPluginTransactional({
+    adapter: new TransactionalAdapterPrisma({ prismaInjectionToken: PrismaService }),
+    imports: [DatabaseModule],
+  })],
+});
+```
+
+```ts
+@Injectable()
+export class UsersRepository {
+  constructor(private readonly txHost: TransactionHost<TransactionalAdapterPrisma>) {}
+
+  async findById(id: string): Promise<null | User> {
+    const row = await this.txHost.tx.user.findUnique({ select: userSelect, where: { id } });
+    return row ? toUser(row) : null;
+  }
+}
+
+@Injectable()
+export class UsersService {
+  @Transactional()
+  async register(input: RegisterInput): Promise<User> {
+    const user = await this.usersRepository.create(input);
+    await this.outbox.enqueue("user.registered", { userId: user.id });
+    return user;
+  }
+}
+```
+
+- Repositories always use `this.txHost.tx`, never `PrismaService` directly — then every query
+  joins the ambient transaction when there is one.
+- `@Transactional()` goes on the **service** method that owns the unit of work. Cross-module calls
+  inside it join the same transaction automatically.
+- Outbox rows are written inside the transaction; the dispatcher sends after commit (`20-jobs`).
+- No network calls (SMTP, S3, HTTP) inside a transaction.
+- Concurrency-sensitive updates: a conditional `updateMany({ where: { id, version } })` and check
+  `count`, or `SELECT … FOR UPDATE` via `$queryRaw` inside the transaction.
+
+## Querying
+
+- Always `select` (a shared `userSelect` constant per repository). `include` pulls every column of
+  the relation; use nested `select` instead.
+- **N+1**: never query inside a loop over rows. Load relations in the same query, or collect ids
+  and fetch with one `where: { id: { in: ids } }`.
+- Lists use keyset (cursor) pagination (`05-api-design`), one query, `limit + 1` rows:
+
+```ts
+const rows = await this.txHost.tx.user.findMany({
+  orderBy: [{ [column]: order }, { id: order }],
+  select: userSelect,
+  take: limit + 1,
+  where: { ...filters, ...(cursor && keysetAfter(column, order, cursor)) },
+});
+return toCursorPage(rows, limit, (row) => ({ id: row.id, v: row[column] }));
+```
+
+  `keysetAfter` / `toCursorPage` live in `common/pagination`. Back every `(sort column, id)` pair
+  with a composite index.
+- Do not call `$transaction([...])` on `txHost.tx`: inside an ambient transaction it is a
+  transaction client, which has no `$transaction`.
+
+- Raw SQL only via the tagged templates `$queryRaw\`…\`` / `$executeRaw\`…\``, which parameterise.
+  `$queryRawUnsafe` / `$executeRawUnsafe` are forbidden. Parse raw results with a zod schema.
+
+## Error mapping
+
+`AllExceptionsFilter` handles `Prisma.PrismaClientKnownRequestError`:
+
+| Code | Meaning | Response |
+| --- | --- | --- |
+| `P2002` | unique violation | 409, code from `meta.target` / constraint map (`users_email_key → USER_EMAIL_TAKEN`), else `CONFLICT` |
+| `P2003` | FK violation | 409 or 400 per constraint map |
+| `P2025` | record to update/delete not found | 404 with the entity's code |
+
+Prefer checking expected conflicts in the service and throwing the `AppException` yourself; the
+filter mapping is the safety net for races.
+
+Repositories return `null` for "not found"; the service throws `AppException(…_NOT_FOUND)`.
+
+## Migrations
+
+- `npm run db:generate` → `prisma migrate dev --create-only --name <snake_name>`; review the SQL,
+  then apply with `prisma migrate dev` and run `prisma generate`. `npm run db:migrate` →
+  `prisma migrate deploy` (CI, staging, prod).
+- Never edit or delete a migration that has been applied anywhere shared. Fix forward.
+- Never `prisma db push` outside a throwaway local DB.
+- The schema and its migration ship in the same PR as the code.
+
+### Safe migrations
+
+On a populated table, split breaking changes into **expand → backfill → contract**, one deploy
+each:
+
+1. Add the new column nullable (or with a constant default) / add the new table.
+2. Backfill in batches (script or job), code writes both.
+3. Add `NOT NULL` / constraints, switch reads, drop the old column in a later release.
+
+- Rename = add + backfill + drop, never a bare rename on a live table.
+- Indexes on big tables: edit the generated SQL to `CREATE INDEX CONCURRENTLY`, alone in its own
+  migration (it cannot run inside a transaction), and keep the `@@index` in the schema so drift
+  detection agrees.
+- Enum values: adding is safe; removing is expand/contract.
+- CHECK constraints, partial indexes, triggers: hand-written SQL in the migration file, noted in
+  the PR.
+
+## Seeding
+
+`prisma/seed.ts` (`npm run db:seed` → `prisma db seed`, wired in `prisma.config.ts`) is idempotent
+(`upsert` by natural key), dev/test only, and reads config through `loadAppConfig()` from
+`src/config`, not `process.env`. `migrate dev` / `migrate reset` do not seed automatically in
+Prisma 7.
+
+## Soft delete
+
+Hard delete by default. Soft delete (`deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)`)
+only where the AC requires restore or audit. Then every repository query filters `deletedAt:
+null` explicitly, and unique constraints become partial indexes (`WHERE deleted_at IS NULL`) in
+hand-written SQL. No global Prisma extension that hides the filter.

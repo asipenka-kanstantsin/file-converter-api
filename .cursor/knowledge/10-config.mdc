@@ -1,0 +1,150 @@
+---
+description: zod env schema, typed AppConfig, AppConfigModule, .env.example, secrets
+alwaysApply: false
+---
+
+# Config Knowledge
+
+`src/config` is the **only** place that reads `process.env`. Everything else injects `AppConfig`.
+Invalid config stops the process at startup, with a message naming every bad variable.
+
+## Files
+
+```
+src/config/
+  env.schema.ts       zod schema of raw env → Env
+  app-config.ts       AppConfig class + buildAppConfig(env)
+  config.module.ts    AppConfigModule (global)
+  load-app-config.ts  loadAppConfig() for CLIs (migrations, seed) outside Nest
+  index.ts
+```
+
+## env.schema.ts
+
+Env values are strings; coerce and validate explicitly:
+
+```ts
+const booleanString = z.enum(["true", "false"]).transform((v) => v === "true");
+
+export const envSchema = z.object({
+  APP_CORS_ORIGINS: z.string().transform((v) => v.split(",").map((s) => s.trim()))
+    .pipe(z.array(z.string().url()).min(1)),
+  APP_FRONTEND_URL: z.string().url(),
+  APP_PORT: z.coerce.number().int().min(1).max(65535).default(3001),
+  APP_TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+  AUTH_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  AUTH_COOKIE_DOMAIN: z.string().optional(),
+  AUTH_COOKIE_SECURE: booleanString.default("true"),
+  AUTH_JWT_ACCESS_SECRET: z.string().min(32),
+  AUTH_JWT_REFRESH_SECRET: z.string().min(32),
+  AUTH_OTP_PEPPER: z.string().min(32),
+  AUTH_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(2_592_000),
+  DATABASE_URL: z.string().url(),
+  LOG_LEVEL: z.enum(["debug", "error", "info", "warn"]).default("info"),
+  NODE_ENV: z.enum(["development", "production", "test"]),
+  STORAGE_DRIVER: z.enum(["local", "s3"]),
+  // + SMTP_*/MAIL_FROM (11-mail), S3_*/STORAGE_LOCAL_*/FIREBASE_* (12-storage),
+  //   DEFAULT_LOCALE/SUPPORTED_LOCALES (13-i18n), JOBS_ENABLED/WORKER (20-jobs).
+  //   The full list with dev values: .cursor/prompts/setup/environment.md
+});
+export type Env = z.infer<typeof envSchema>;
+```
+
+- **Secrets have no default.** `AUTH_JWT_SECRET`, passwords, API keys, peppers must be set in
+  every environment, including tests (the test env file sets throwaway values).
+- Defaults only for safe, non-secret tuning values.
+- Driver-specific variables (S3 vs local) use `z.discriminatedUnion` on the driver, or
+  `superRefine` requiring the right group — a missing `S3_BUCKET` with `STORAGE_DRIVER=s3` fails
+  at startup, not on the first upload.
+- `booleanString`, never `z.coerce.boolean()` (`"false"` would be `true`).
+
+## AppConfig
+
+Grouped, typed, read-only. Services depend on the group they need, not on env names:
+
+```ts
+export class AppConfig {
+  readonly app!: { corsOrigins: string[]; port: number; trustProxy: number };
+  readonly auth!: { accessTtlSeconds: number; cookieSecure: boolean; jwtSecret: string; … };
+  readonly db!: { url: string };
+  readonly mail!: { … };
+  readonly storage!: { … };
+}
+
+export function buildAppConfig(env: Env): AppConfig {
+  return Object.freeze({
+    app: { corsOrigins: env.APP_CORS_ORIGINS, … },
+    auth: { … },
+    db: { url: env.DATABASE_URL },
+    mail: { … },
+    storage: { … },
+  });
+}
+```
+
+| Group | Holds |
+| --- | --- |
+| `app` | port, CORS origins, trust proxy, docs flag, public frontend URL |
+| `db` | connection URL, pool size |
+| `auth` | JWT secret, TTLs, cookie flags/domain, OTP pepper |
+| `mail` | SMTP connection, from address (exact vars: `11-mail`) |
+| `storage` | driver + driver settings (exact vars: `12-storage`) |
+| `log` | level, pretty flag |
+
+Add a group only for a new infrastructure concern; business settings belong to the domain's own
+tables or constants, not env.
+
+## Module
+
+```ts
+// load-app-config.ts — the one function that reads process.env
+export function loadAppConfig(): AppConfig {
+  loadDotenv({ path: process.env.NODE_ENV === 'test' ? '.env.test' : '.env', quiet: true });
+  return parseAppConfig(process.env);   // throws InvalidConfigError listing variable names
+}
+
+// config.module.ts
+@Global()
+@Module({
+  exports: [AppConfig],
+  providers: [{ provide: AppConfig, useFactory: loadAppConfig }],
+})
+export class AppConfigModule {}
+```
+
+- No `@nestjs/config`: dotenv + the zod schema do everything it would, with one code path.
+- `AppConfig` is built by `loadAppConfig()` — the same function the seed and other CLIs call, so
+  Nest and the CLIs can never parse env differently. `dotenv` does not override variables already
+  set by the platform. `prisma.config.ts` is the only other env reader (`07-database-prisma`).
+- Invalid env: `InvalidConfigError` names every bad variable (top-level names, never values); the
+  process exits 1 before serving.
+
+## .env files
+
+- `.env.example` is committed and lists **every** variable the schema knows, grouped and in the
+  schema's order, with a placeholder or the default. A variable missing from it is a review
+  defect. Secrets get obviously fake placeholders (`change-me-32-chars-minimum…`).
+- `.env` is git-ignored. `.env.test` holds test values and may be committed if it contains no real
+  secret.
+- Adding a variable = schema + `AppConfig` group + `.env.example` + deployment config, in the
+  same PR.
+
+## Environment-specific behaviour
+
+Never branch on `NODE_ENV` in business code. Expose an explicit flag and branch on that:
+
+| Instead of | Use |
+| --- | --- |
+| `if (NODE_ENV !== "production") enableDebugRoutes()` | an explicit `config.app.*` flag |
+| `if (NODE_ENV === "development") secure = false` | `config.auth.cookieSecure` |
+| `if (NODE_ENV === "test") skipMail()` | the SMTP sink (Mailpit) via config, same code path |
+
+`NODE_ENV` may be read only inside `src/config` to pick defaults for non-secret flags.
+
+## Don't
+
+- Don't read `process.env` anywhere outside `src/config` — not in `main.ts`, not in module
+  factories, not in tests (tests use the test env file).
+- Don't give a secret a default "for local dev".
+- Don't log `AppConfig`; if a startup summary is useful, log non-secret fields only.
+- Don't mutate config at runtime.

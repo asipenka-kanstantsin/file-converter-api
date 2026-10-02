@@ -1,0 +1,30 @@
+---
+description: Code quality rules
+alwaysApply: true
+---
+
+# Code Quality
+
+Always:
+
+- use TypeScript strict mode
+- use named exports and absolute imports (`@/…`)
+- validate every input with a zod DTO through the global ZodValidationPipe
+- return response DTOs, never ORM entities
+- throw `AppException` with an `ErrorCode`
+- read config through the typed config, never `process.env`
+- inject dependencies through the constructor
+- sort object keys and interface members alphabetically
+- write self-explanatory code; comment only non-obvious decisions (why, not what)
+
+Avoid:
+
+- any, `as` casts of external data, non-null `!` on external data
+- class-validator / class-transformer (zod is the validator)
+- raw SQL string concatenation
+- `console.log` (use the injected logger)
+- business logic in controllers
+- `new` for injectable services
+- static mutable state
+- unbounded queries on list endpoints
+- redundant comments, section banners, commented-out code

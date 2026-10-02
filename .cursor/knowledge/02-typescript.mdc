@@ -1,0 +1,151 @@
+---
+description: TypeScript strictness, boundary typing, zod-inferred types, unions vs enums
+alwaysApply: false
+---
+
+# TypeScript Knowledge
+
+## tsconfig
+
+Keep the module/target settings `nest new` generated; the strictness block is non-negotiable:
+
+```jsonc
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "useUnknownInCatchVariables": true,
+    "forceConsistentCasingInFileNames": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] }
+  }
+}
+```
+
+- `exactOptionalPropertyTypes` is **optional**. It makes "absent" and "`undefined`" different,
+  which matches the API rule (absent ≠ `null`), but ORM input types fight it. Turn it on only at
+  project start, never mid-project.
+- `experimentalDecorators` + `emitDecoratorMetadata` are required by Nest DI; do not remove them.
+- `npm run typecheck` (`tsc --noEmit`) is part of the PR gate. Tests are type-checked too.
+
+## Forbidden
+
+- `any` (explicit or implicit), `@ts-ignore`, `@ts-nocheck`. `@ts-expect-error` only with a reason
+  and only in tests.
+- `as` casts of anything that came from outside: request data, DB JSON columns, env, third-party
+  responses, `JSON.parse`. Parse it instead.
+- Non-null `!` on external data. On internal data only when an invariant is obvious from the
+  surrounding line.
+- `Function`, `Object`, `{}` as types.
+
+## Boundaries: `unknown` in, parsed types out
+
+Everything crossing into the process is `unknown` until a zod schema parses it:
+
+| Source | Parsed by |
+| --- | --- |
+| Body, query, params | nestjs-zod DTO + global `ZodValidationPipe` |
+| Env | `envSchema` in `src/config` |
+| JSON columns, cached blobs | a schema in the owning module, parsed in the repository |
+| Third-party HTTP / webhooks | a schema in the `infrastructure` adapter |
+| `catch (error)` | narrowed (`instanceof AppException`, ORM error class) before use |
+
+```ts
+const payload: unknown = JSON.parse(raw);
+const event = paymentEventSchema.parse(payload);
+```
+
+## Types come from schemas
+
+Do not hand-write a type that a zod schema already describes:
+
+```ts
+export const userResponseSchema = z.object({ email: z.string(), id: z.string().uuid() });
+export type UserResponse = z.infer<typeof userResponseSchema>;
+```
+
+- DTO classes (`createZodDto`) are for Nest (validation pipe, serializer). Services take the **inferred type**
+  or a domain type, not the DTO class, so they stay callable from jobs and tests.
+- Domain types (what a repository returns) live in `<module>.types.ts`. They are not ORM types —
+  the repository maps.
+
+## Unions, not enums — except `ErrorCode`
+
+Domain value sets are `as const` tuples → `z.enum` → inferred union. The tuple is the single
+source for validation, OpenAPI and the type:
+
+```ts
+export const USER_STATUSES = ["active", "pending_verification", "suspended"] as const;
+export const userStatusSchema = z.enum(USER_STATUSES);
+export type UserStatus = z.infer<typeof userStatusSchema>;
+```
+
+- Values are lower_snake strings (the API rule in `05-api-design`).
+- The only TypeScript `enum` in the codebase is `ErrorCode` (`08-errors`). It is a string enum
+  whose values equal its keys. Nothing else uses `enum`.
+- The DB enum/values must stay identical to the tuple; the repository mapping fails to compile if
+  they drift (see `07-database-*`).
+
+## Discriminated unions for state
+
+Model state that carries different data per status as a discriminated union, and switch
+exhaustively:
+
+```ts
+type Invite =
+  | { acceptedAt: Date; status: "accepted"; userId: string }
+  | { expiresAt: Date; status: "pending" }
+  | { revokedAt: Date; status: "revoked" };
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled variant: ${JSON.stringify(value)}`);
+}
+
+switch (invite.status) {
+  case "accepted": return …;
+  case "pending": return …;
+  case "revoked": return …;
+  default: return assertNever(invite);
+}
+```
+
+`assertNever` lives in `common/utils`. Its `Error` is an internal bug and ends up as a 500.
+
+## Interfaces vs types
+
+- `interface` for object contracts, ports (`StoragePort`), options objects.
+- `type` for unions, intersections, mapped/utility types and `z.infer` aliases.
+- No `I` prefix, no `Interface` suffix.
+
+## Functions and exports
+
+- Exported functions and public service methods declare their return type
+  (`Promise<UserResponse>`), so a refactor cannot silently widen the contract.
+- Named exports only. No `export default`.
+- `readonly` on injected constructor params and on config objects.
+- `as const` for literal tables; `satisfies` to check a literal against a type without widening:
+
+```ts
+export const ERROR_STATUS = {
+  [ErrorCode.USER_NOT_FOUND]: HttpStatus.NOT_FOUND,
+} satisfies Partial<Record<ErrorCode, HttpStatus>>;
+```
+
+## Dates, money, ids
+
+- `Date` inside the process, ISO strings on the wire (the response schema converts).
+- Money is an integer of minor units (`number` if it fits `Number.MAX_SAFE_INTEGER`, else `bigint`
+  mapped to a string on the wire).
+- Ids are `string` (uuid). Branded types (`UserId`) only if the project already uses them.
+
+## Don't
+
+- Don't widen with `Partial<T>` to dodge a missing field — model the real optionality.
+- Don't return `Promise<any>` from a repository because the ORM type is awkward — map it.
+- Don't export mutable module-level state.
+- Don't write generic helpers with more than two type parameters; write two functions.

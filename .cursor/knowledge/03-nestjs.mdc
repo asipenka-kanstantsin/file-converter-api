@@ -1,0 +1,164 @@
+---
+description: NestJS modules, DI, scopes, request pipeline, bootstrap checklist, custom decorators
+alwaysApply: false
+---
+
+# NestJS Knowledge
+
+## Modules
+
+- One module per business domain in `src/modules/<domain>`; infrastructure adapters are modules
+  too (`DatabaseModule`, `MailModule`, `StorageModule`).
+- A module `exports` only what other modules may use — usually its service. Repositories,
+  mappers and controllers are never exported.
+- `@Global()` only for true infrastructure used everywhere: config, database, the CLS/transaction
+  module. Never for a business module.
+- Dynamic modules (`forRoot` / `forRootAsync` / `register`) only in `infrastructure` or `config`,
+  configured from `AppConfig` via `useFactory` + `inject`.
+- No `forwardRef`. A cycle means a boundary is wrong (`01-architecture`).
+
+## Providers and DI
+
+- Constructor injection only, `private readonly`. Never `new` an injectable, never
+  `moduleRef.get()` in business code.
+- Ports are injected by token. An interface cannot be a token, so pair the interface with an
+  UPPER_SNAKE symbol next to it:
+
+```ts
+export const STORAGE_PORT = Symbol("STORAGE_PORT");
+export interface StoragePort {
+  putObject(input: PutObjectInput): Promise<void>;
+}
+
+{ inject: [AppConfig], provide: STORAGE_PORT, useFactory: createStorageAdapter }
+
+constructor(@Inject(STORAGE_PORT) private readonly storage: StoragePort) {}
+```
+
+- A constructor-injected class must be imported as a **value**, not `import type` — decorator
+  metadata needs the runtime reference (`22-imports`).
+
+## Scopes
+
+| Scope | Use |
+| --- | --- |
+| Default (singleton) | Everything. |
+| `REQUEST` | Never in business code. It bubbles up the whole injection chain and re-creates it per request. |
+| `TRANSIENT` | Only for a stateless helper that must not be shared (rare). |
+
+Per-request data (current user, locale, request id, active transaction) travels through
+`nestjs-cls` (`ClsService`), not request-scoped providers.
+
+## Request pipeline order
+
+```
+middleware → guards → interceptors (before) → pipes → handler
+           → interceptors (after) → exception filters
+```
+
+Global guards run in the order their `APP_GUARD` providers are registered:
+
+```
+ThrottlerGuard → CsrfGuard → JwtAuthGuard → PermissionGuard
+```
+
+| Piece | Job | Registered as |
+| --- | --- | --- |
+| Middleware | cookie-parser, helmet, CLS setup, request id | `main.ts` / `ClsModule` |
+| Guards | may this request proceed at all (rate, CSRF, authn, role) | `APP_GUARD` |
+| Interceptors | request-scoped logging context, `ZodSerializerInterceptor` | `APP_INTERCEPTOR` |
+| Pipes | `ZodValidationPipe` | `APP_PIPE` |
+| Filters | `AllExceptionsFilter` | `APP_FILTER` |
+
+Register global pipes/guards/interceptors/filters as `APP_*` providers in `AppModule`, not with
+`app.useGlobal*()`, so they get DI and the e2e app picks them up automatically.
+
+## Guards: no business logic
+
+A guard answers "authenticated? right role? CSRF valid? under the rate limit?" from the request
+and route metadata only. It never loads a domain row to decide ownership — that is the service's
+job (`09-auth`). Guards read metadata with `Reflector.getAllAndOverride(KEY, [handler, class])`.
+
+## Custom decorators
+
+Live in `common/decorators`:
+
+```ts
+export const IS_PUBLIC_KEY = "isPublic";
+export const Public = (): CustomDecorator => SetMetadata(IS_PUBLIC_KEY, true);
+
+export const RequirePermission = (permission: string, action: string): CustomDecorator =>
+  SetMetadata(PERMISSION_KEY, { action, permission });
+
+export const CurrentUser = createParamDecorator(
+  (_data: unknown, context: ExecutionContext): AuthUser => {
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    return request.user;
+  },
+);
+```
+
+- Compose repeated stacks with `applyDecorators` (`x-error-codes` in `openapi/openapi.yaml`, `@AuthEndpoint`).
+- `ExecutionContext` is only touched in guards, interceptors, filters and param decorators. Check
+  `context.getType()` if the code could run for non-HTTP contexts (queues, CLI).
+
+## Lifecycle hooks
+
+- `OnModuleInit` — warm-up that must succeed before serving (verify SMTP config, connect a client).
+- `OnApplicationBootstrap` — start pollers/workers (outbox dispatcher).
+- `OnModuleDestroy` / `BeforeApplicationShutdown` — stop workers, flush, close pools.
+- They only fire on SIGTERM when `enableShutdownHooks()` is on.
+
+## Bootstrap
+
+`main.ts` stays tiny; the HTTP setup lives in one `configureApp(app)` function
+(`src/app.setup.ts`) that the e2e app factory calls too, so tests run the same stack.
+
+Checklist for `configureApp`:
+
+- [ ] `NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true })`, then the
+      app logger (`14-logging`)
+- [ ] `app.setGlobalPrefix('api', { exclude: HEALTH_ROUTES })` — `/health*` stays outside (`05-api-design`)
+- [ ] `app.set("trust proxy", config.app.trustProxy)` — correct client IP for throttling and
+      `Secure` cookies behind a proxy
+- [ ] `helmet()`
+- [ ] `cookieParser()`
+- [ ] `app.enableCors({ credentials: true, origin: config.app.corsOrigins, allowedHeaders:
+      ["Content-Type", "X-CSRF-Token", "X-Locale", "X-Request-Id"] })` — an explicit allowlist,
+      never `origin: true` or `"*"` with credentials
+- [ ] no Swagger: `OpenApiController` serves `openapi/openapi.yaml` as-is at `/api/openapi.yaml` and
+      `/api/openapi.json` (`05-api-design`)
+- [ ] `app.enableShutdownHooks()`
+- [ ] body size limit set explicitly (`app.useBodyParser("json", { limit: "1mb" })`)
+
+`AppModule` providers: `APP_PIPE` ZodValidationPipe, `APP_INTERCEPTOR` ZodSerializerInterceptor,
+`APP_FILTER` AllExceptionsFilter, the four `APP_GUARD`s in the order above.
+
+## Controllers
+
+```ts
+@Controller("users")
+export class UsersController {
+  constructor(private readonly usersService: UsersService) {}
+
+  @Get(":id")
+  @ZodSerializerDto(UserResponseDto)
+  async getById(@Param() { id }: IdParamDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.getById(user, id);
+  }
+}
+```
+
+- Params are validated by a zod DTO too (`IdParamDto` in `common`), not by Nest's `ParseUUIDPipe`,
+  whose error bypasses the `VALIDATION_FAILED` envelope.
+
+- One service call per handler. No `@Res()` unless streaming a file; with `@Res()` Nest's
+  interceptors and serializer are bypassed. For cookies use `@Res({ passthrough: true })`.
+- `@HttpCode()` for non-default success statuses (204 on DELETE, 200 on action POSTs).
+
+## Don't
+
+- Don't use `REQUEST` scope or inject `REQUEST` into services.
+- Don't catch and re-wrap errors in controllers; the filter owns the response.
+- Don't put `process.env` in module factories — inject `AppConfig`.
+- Don't register the same provider in two modules; import the owning module.

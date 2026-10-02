@@ -1,0 +1,126 @@
+---
+description: Testing rules — Jest unit tests, supertest e2e against real Postgres, mocks policy, contract snapshot, 80 % coverage floor + ratchet, PR gate
+alwaysApply: false
+---
+
+# Testing Knowledge
+
+## Commands
+
+```bash
+npm run test          # Jest unit, single run
+npm run test:watch
+npm run test:cov      # unit + enforced coverage threshold
+npm run test:e2e      # e2e against real Postgres, Mailpit, local storage
+npm run verify        # format:check → lint → typecheck → test:cov → build → test:e2e
+```
+
+`verify` is the pull-request gate, run serially. CI runs the same scripts (e2e with Postgres and
+Mailpit as service containers); a green `verify` locally should mean a green pipeline.
+
+## Layout and config
+
+| Kind | Location | Config |
+| --- | --- | --- |
+| Unit | `src/**/*.spec.ts`, next to the code | `jest.config.ts` project `unit` |
+| e2e | `test/**/*.e2e-spec.ts` | `jest.config.ts` project `e2e`, `--runInBand`, `globalSetup` runs `prisma migrate deploy` on `app_test` |
+| Helpers | `test/helpers/` | app factory, db reset, factories, auth, mail reader |
+
+`ts-jest`, `moduleNameMapper` for `@/` and for the `.js` suffixes in the generated Prisma client.
+Jest runs under `node --experimental-vm-modules` (the npm scripts do it): the Prisma 7 client loads
+its WASM query compiler through dynamic `import()`. Test env via `.env.test` loaded by the
+config module — never `process.env` in a spec.
+
+## Unit
+
+Services with their collaborators replaced: repository fakes (in-memory class implementing the same
+methods) or `jest.fn()` mocks, a `FakeMailTransport`, a fixed clock. Test the rules: permission
+branches, state transitions, error codes thrown.
+
+```ts
+await expect(service.update(otherUserId, id, dto)).rejects.toMatchObject({ code: ErrorCode.ASSIGNMENT_NOT_FOUND });
+```
+
+Pure functions (mappers, policies, key builders) get table-driven tests. No unit test for a
+controller that only delegates — its e2e covers it.
+
+## e2e
+
+A real Nest app, the real pipes/filters/guards, the real ORM against real Postgres:
+
+```ts
+const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+  .overrideProvider(MAIL_TRANSPORT).useValue(fakeTransport) // only if not using Mailpit
+  .compile();
+app = moduleRef.createNestApplication();
+configureApp(app);            // same function main.ts uses: prefix, cookies, CORS, filters
+await app.init();
+```
+
+- Postgres from docker compose, or Testcontainers when the suite must be self-contained.
+- **DB reset**: `TRUNCATE … RESTART IDENTITY CASCADE` of every table except migrations
+  `beforeEach` (single worker), or one schema/database per Jest worker
+  (`JEST_WORKER_ID`) migrated in `globalSetup` for parallel runs. Pick one per project.
+- **Factories** in `test/helpers/factories.ts` insert through the repository/ORM with valid
+  defaults and overrides: `await createUser({ role: "admin" })`. No shared seed that tests mutate.
+- **Auth helper** logs in over HTTP and keeps cookies and CSRF:
+
+```ts
+const agent = await loginAs(app, user);        // supertest.agent, cookie jar kept
+await agent.post("/items").set("X-CSRF-Token", agent.csrf).send(body).expect(201);
+```
+
+- Outbox: run `dispatcher.tick()` explicitly, then assert Mailpit / storage (`20-jobs.mdc`).
+
+## What may be mocked
+
+| Boundary | Replacement |
+| --- | --- |
+| SMTP | Mailpit (preferred in e2e) or `FakeMailTransport` |
+| Object storage | `STORAGE_DRIVER=local` temp dir; compose S3 (SeaweedFS) for the S3 adapter suite |
+| Third-party HTTP | `nock` or `msw` — unmatched request fails the test |
+| Clock | injected `Clock` / Jest fake timers |
+
+Never mock the repository, the ORM, the database, the validation pipe, guards or the exception
+filter in e2e. A test that passes with those mocked proves nothing about the contract.
+
+## What every endpoint's e2e covers
+
+1. Success: status, response body shape, DB state after the call.
+2. 401 without a session (unless `@Public()`).
+3. 403 for a wrong role, 404 for another user's resource (BOLA — `19-security.mdc`).
+4. 400 `VALIDATION_FAILED` for a representative invalid body, `context.fields` asserted.
+5. Each documented `ErrorCode` the endpoint can return.
+6. Unsafe method without `X-CSRF-Token` → 403 `CSRF_INVALID` (once per controller is enough).
+7. Side effects: mail in Mailpit with the right locale, file row + object, audit row.
+
+Asserting the error envelope means asserting `code`, never `detail` text (except in the i18n test).
+
+## Contract tests
+
+`openapi/openapi.yaml` is the contract (`05-api-design`); tests enforce it from both sides:
+
+- **Responses** — every e2e request goes through the `test/helpers/contract.ts` helper, which finds
+  the operation by method + path template, validates status, headers and body against the
+  response schema (Ajv 2020-12, the OpenAPI 3.1 dialect) and fails on a status the spec does not
+  list. Error bodies are also checked against `x-error-codes`.
+- **Inventory** — one spec compares the registered Nest routes with the spec's operations: a route
+  missing from the spec, or an operation with no route, fails.
+- **Spec quality** — `npm run openapi:lint` in `verify`.
+
+An intended contract change edits the spec in the same PR and is listed under "Contract changes".
+
+## Coverage floor and ratchet
+
+The Notion NFR page requires **≥ 80 %** coverage from unit + integration tests. `npm run test:cov`
+merges unit and e2e coverage and `coverageThreshold.global` starts at 80 for statements, branches,
+functions and lines; it only moves up. Never lower a number to get a change through — add the test or fix the change. Excluded:
+`main.ts`, `*.module.ts`, `index.ts` barrels, migrations, generated files, `test/`.
+
+## Rules
+
+- Every behaviour change ships with a test; a bugfix ships with the test that reproduces it.
+- A 500 anywhere in an e2e run is a failure, even inside an "expects error" test.
+- Tests are independent and order-free; unique emails per test.
+- No `sleep`; poll with a deadline (Mailpit) or tick the worker.
+- No `.only`, no skipped tests on `main`.

@@ -1,0 +1,283 @@
+openapi: 3.1.0
+info:
+  title: File Converter API
+  version: 0.1.0
+  description: |
+    Back End for converting files between CSV, JSON, XML, YAML and images between PNG, JPEG, SVG,
+    with user accounts, e-mail confirmation and role-based access control.
+
+    This document is written first (contract-first) and is the contract the frontend builds against.
+
+    Conventions for every operation:
+    - Every response carries `X-Request-Id`.
+    - Every error response uses `ErrorEnvelope`; `x-error-codes` lists the `code` values a response
+      can carry. Clients branch on `code`, never on `detail`.
+    - `default` covers errors any request can hit (malformed body, body too large, unsupported
+      encoding, unexpected server error).
+    - Every path is under `/api`, except the monitoring endpoints `/health`, `/health/live` and
+      `/health/ready`.
+    - A path that does not exist answers `404` with `ErrorEnvelope` and code `ROUTE_NOT_FOUND`.
+  license:
+    name: UNLICENSED
+    identifier: UNLICENSED
+servers:
+  - url: http://localhost:3001
+    description: Local development
+tags:
+  - name: system
+    description: Health checks and the API contract itself.
+security: []
+
+paths:
+  /health:
+    get:
+      operationId: health_check
+      tags: [system]
+      summary: Health check for monitoring (process and database)
+      responses:
+        '200':
+          $ref: '#/components/responses/Healthy'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /health/live:
+    get:
+      operationId: health_live
+      tags: [system]
+      summary: Liveness probe (process only, no dependencies)
+      responses:
+        '200':
+          $ref: '#/components/responses/Healthy'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /health/ready:
+    get:
+      operationId: health_ready
+      tags: [system]
+      summary: Readiness probe (database reachable)
+      responses:
+        '200':
+          $ref: '#/components/responses/Healthy'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/openapi.json:
+    get:
+      operationId: openApi_json
+      tags: [system]
+      summary: This contract as JSON
+      responses:
+        '200':
+          description: The OpenAPI document.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                type: object
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/openapi.yaml:
+    get:
+      operationId: openApi_yaml
+      tags: [system]
+      summary: This contract as YAML (the source file)
+      responses:
+        '200':
+          description: The OpenAPI document.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/yaml:
+              schema:
+                type: string
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+components:
+  headers:
+    RequestId:
+      description: Request id — echoed from a valid incoming `X-Request-Id` or generated.
+      required: true
+      schema:
+        type: string
+        pattern: '^[\w-]{1,64}$'
+    RetryAfter:
+      description: Seconds until the client may retry.
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    RateLimitLimit:
+      description: Requests allowed in the current window.
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    RateLimitRemaining:
+      description: Requests left in the current window.
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+    RateLimitReset:
+      description: Seconds until the window resets.
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+
+  schemas:
+    ErrorCode:
+      type: string
+      description: Stable machine-readable error code. Clients branch on it, never on `detail`.
+      enum:
+        - CONFLICT
+        - INTERNAL_ERROR
+        - MALFORMED_REQUEST
+        - PAYLOAD_TOO_LARGE
+        - RATE_LIMITED
+        - REQUEST_REJECTED
+        - ROUTE_NOT_FOUND
+        - SERVICE_UNAVAILABLE
+        - UNSUPPORTED_MEDIA_TYPE
+        - VALIDATION_FAILED
+
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [code, detail]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        detail:
+          type: string
+          description: Human-readable message (English). Display only; never parse it.
+        context:
+          type: object
+          description: Safe, code-specific details; each response documents its own shape.
+
+    RateLimitedEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ErrorEnvelope'
+        - type: object
+          properties:
+            code:
+              const: RATE_LIMITED
+            context:
+              type: object
+              additionalProperties: false
+              required: [retryAfter]
+              properties:
+                retryAfter:
+                  type: integer
+                  minimum: 1
+                  description: Seconds until the client may retry (same as `Retry-After`).
+
+    ServiceUnavailableEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ErrorEnvelope'
+        - type: object
+          required: [context]
+          properties:
+            code:
+              const: SERVICE_UNAVAILABLE
+            context:
+              type: object
+              additionalProperties: false
+              required: [checks]
+              properties:
+                checks:
+                  $ref: '#/components/schemas/HealthChecks'
+
+    HealthChecks:
+      type: object
+      additionalProperties: false
+      properties:
+        database:
+          type: string
+          enum: [down, up]
+
+    HealthReport:
+      type: object
+      additionalProperties: false
+      required: [checks, status]
+      properties:
+        status:
+          const: ok
+        checks:
+          $ref: '#/components/schemas/HealthChecks'
+
+  responses:
+    Healthy:
+      description: Healthy.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/HealthReport'
+    RateLimited:
+      description: Too many requests.
+      x-error-codes: [RATE_LIMITED]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RateLimitedEnvelope'
+    ServiceUnavailable:
+      description: A dependency is down.
+      x-error-codes: [SERVICE_UNAVAILABLE]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ServiceUnavailableEnvelope'
+    Default:
+      description: >-
+        Error any request can hit: unparsable or too large body, unsupported content
+        encoding, a client error rejected by the framework, or an unexpected server error.
+      x-error-codes:
+        - INTERNAL_ERROR
+        - MALFORMED_REQUEST
+        - PAYLOAD_TOO_LARGE
+        - REQUEST_REJECTED
+        - UNSUPPORTED_MEDIA_TYPE
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'

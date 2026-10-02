@@ -1,0 +1,136 @@
+---
+description: Background work — transactional outbox, dispatcher worker, retries, idempotent handlers, scheduled jobs with advisory locks
+alwaysApply: false
+---
+
+# Jobs & Outbox Knowledge
+
+No Redis by default. Postgres is the queue: side effects are rows written in the same transaction
+as the business change, and a worker delivers them.
+
+## The outbox table
+
+`outbox_messages` (in `infrastructure/outbox`):
+
+| Column | Type | |
+| --- | --- | --- |
+| `id` | uuid | |
+| `type` | text | `mail.send`, `storage.delete`, `<domain>.<event>` |
+| `payload` | jsonb | ids and small values; validated by the handler's zod schema |
+| `idempotency_key` | text, unique, nullable | dedupes enqueues |
+| `status` | text | `pending` → `processing` → `done` / `dead` |
+| `attempts` | int | |
+| `next_attempt_at` | timestamptz | indexed with `status` |
+| `locked_until` | timestamptz, nullable | lease for a claimed row |
+| `last_error` | text, nullable | truncated, no PII |
+| `created_at` / `processed_at` | timestamptz | |
+
+Index: `(status, next_attempt_at)`. `done` rows are purged by a scheduled job after N days.
+
+## Enqueue — same transaction
+
+```ts
+await this.db.transaction(async (tx) => {
+  await this.assignments.publish(tx, id);
+  await this.outbox.enqueue(tx, { payload: { assignmentId: id }, type: "assignment.published" });
+});
+```
+
+- `OutboxService.enqueue(tx, …)` requires the transaction handle; there is no overload without it.
+- Payload carries ids, not snapshots of entities — the handler reloads current state. Exception:
+  data that must reflect the moment of the event (e.g. the recipient's locale for mail).
+- The payload type is a discriminated union keyed by `type`, so producers and handlers share it.
+- Duplicate `idempotency_key` → `ON CONFLICT DO NOTHING`.
+
+## Dispatcher
+
+A provider in the same app (or the same image started with `WORKER=true` when it should scale
+separately). Each tick:
+
+```sql
+UPDATE outbox_messages SET status = 'processing', locked_until = now() + interval '2 minutes',
+       attempts = attempts + 1
+WHERE id IN (
+  SELECT id FROM outbox_messages
+  WHERE (status = 'pending' AND next_attempt_at <= now())
+     OR (status = 'processing' AND locked_until < now())
+  ORDER BY next_attempt_at
+  LIMIT $1
+  FOR UPDATE SKIP LOCKED)
+RETURNING *;
+```
+
+Claiming commits before handlers run, so a crash leaves a lease that expires and is retried.
+Handlers run outside the claim transaction, with a timeout, bounded concurrency.
+
+| Outcome | Update |
+| --- | --- |
+| success | `done`, `processed_at = now()` |
+| retryable error | `pending`, `next_attempt_at = now() + min(base * 2^attempts, cap) ± jitter`, `last_error` |
+| permanent error or `attempts >= max` | `dead`, `last_error`, log `error` |
+
+Defaults: base 30 s, cap 1 h, max 8 attempts — per type overridable. Poll interval ~1–2 s with an
+immediate re-tick when a batch was full. `dead` rows are counted in health/metrics and can be
+requeued by an admin action (`status = 'pending', attempts = 0`).
+
+## Handlers
+
+```ts
+@OutboxHandler("mail.send")
+export class MailSendHandler implements OutboxMessageHandler<"mail.send"> {
+  async handle(payload: MailSendPayload, ctx: OutboxContext): Promise<void> { … }
+}
+```
+
+- **Idempotent**: at-least-once delivery means a handler can run twice. Check-then-act on state
+  ("already sent", "object already gone"), use provider idempotency keys, upserts.
+- Throw `PermanentJobError` for failures a retry cannot fix (invalid payload, entity deleted,
+  recipient rejected); anything else is retryable.
+- A handler that writes to the DB and enqueues follow-ups does it in one transaction.
+- Handlers live in the module that owns the reaction (`modules/<domain>/handlers/`) or in
+  `infrastructure` for technical ones (mail, storage). Registered via a discovery decorator; an
+  unknown `type` goes `dead`.
+- Log with the outbox id, type and attempt in a CLS context (`14-logging.mdc`).
+
+## Scheduled jobs
+
+`@nestjs/schedule` `@Cron()` for periodic work (orphan file cleanup, purge `done` outbox rows,
+expire trials, nightly recalculation). With several instances, each job takes a Postgres advisory
+lock so exactly one runs:
+
+```ts
+@Cron(CronExpression.EVERY_HOUR)
+async purgeOutbox(): Promise<void> {
+  await this.locks.runExclusive("cron:purge-outbox", async () => { … });
+}
+// runExclusive: SELECT pg_try_advisory_xact_lock(hashtext($1)) inside a transaction; false → skip
+```
+
+- A cron job does work in batches and is safe to re-run or to be skipped once.
+- Long work is split: the cron enqueues outbox rows, the dispatcher executes them.
+- Crons can be disabled by config (`JOBS_ENABLED=false`) for e2e and for API-only instances.
+
+## Scaling up
+
+When volume or scheduling needs outgrow the table (delayed jobs at scale, priorities, fan-out,
+rate-limited queues), move to **pg-boss** — still Postgres, no new infrastructure. Keep the
+`enqueue(tx, …)` API so producers do not change. Introduce Redis/BullMQ only with a measured reason
+and an ADR.
+
+## Testing
+
+- e2e: `JOBS_ENABLED=false`; after the HTTP call, assert the outbox row, then call
+  `await app.get(OutboxDispatcher).tick()` and assert the effect (Mailpit message, deleted object,
+  updated row). Tick again to prove idempotency where it matters.
+- Unit: handlers with fakes; backoff calculation table-driven; a failing handler → `pending` with
+  a later `next_attempt_at`, then `dead` at max attempts.
+- Test the rollback case: a business write that fails leaves no outbox row.
+
+## Don't
+
+- Don't call SMTP, storage or third-party APIs inside a request transaction or handler that the
+  request awaits.
+- Don't enqueue outside the business transaction ("after commit" callbacks lose messages on crash).
+- Don't write non-idempotent handlers.
+- Don't run crons on every instance without a lock.
+- Don't add Redis just to have a queue.

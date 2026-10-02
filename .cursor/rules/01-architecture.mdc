@@ -1,0 +1,24 @@
+---
+description: Modular monolith and layering rules
+alwaysApply: true
+---
+
+# Architecture Rules
+
+Top-level dependency direction:
+
+config ← common ← infrastructure ← modules
+
+Inside a module:
+
+Controller → Service → Repository → ORM
+
+Rules:
+
+- Controllers do HTTP only: guards, DTO parsing, one service call, response mapping.
+- Services own business rules, resource permission checks and transactions.
+- Repositories are the only place that touches the ORM.
+- A module is used from outside only through the providers it exports.
+- No imports of another module's repository, entity or internal files.
+- No forwardRef; a cycle means a boundary is wrong.
+- No business logic in common/ or infrastructure/.

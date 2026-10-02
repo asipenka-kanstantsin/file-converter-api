@@ -1,0 +1,174 @@
+---
+description: Cookie JWT sessions without server-side refresh state, CSRF, guards, DB-driven RBAC, e-mail confirmation challenges, rate limits
+alwaysApply: false
+---
+
+# Auth Knowledge
+
+Project-specific: built from the Notion pages "Регистрация", "Аутентификация", "Авторизация",
+"RBAC" and `docs/decisions.md` (A1–A8, R1–R4). Where this file and a decision disagree, the
+decision wins and this file is fixed.
+
+## Model
+
+- **Access token** — JWT HS256, 15 min (`AUTH_ACCESS_TTL_SECONDS=900`), cookie `access_token`.
+  Claims: `sub` (user id), `typ: "access"`, `ver` (the user's `tokenVersion`), `iat`, `exp`.
+- **Refresh token** — JWT HS256 signed with a **different** secret, 30 days
+  (`AUTH_REFRESH_TTL_SECONDS=2592000`), cookie `refresh_token`. Claims: `sub`, `typ: "refresh"`,
+  `ver`, `iat`, `exp`.
+- **Nothing about refresh tokens is stored on the server**: no table, no `jti`, no session or
+  family id, no allowlist or denylist (Notion "Авторизация"). Rotation means every successful
+  refresh issues a **new pair**; the old refresh JWT simply expires.
+- **Revocation without refresh storage** — `users.token_version` (int). Both guards reject a JWT
+  whose `ver` differs from the user's current value or whose user is not `active`. It is
+  incremented on account deletion, password reset and admin block. Logout does **not** touch it:
+  logout = clearing the cookies (a stolen refresh JWT stays valid until `exp`, as the spec
+  accepts).
+- **Passwords** — argon2id (`argon2`), never logged, policy in `common/validation/password.schema.ts`
+  (decision A8).
+
+Lifetimes and secrets are config (`AUTH_ACCESS_*`, `AUTH_REFRESH_*`, `AUTH_JWT_ACCESS_SECRET`,
+`AUTH_JWT_REFRESH_SECRET`), never constants.
+
+## Cookies
+
+| Cookie | Value | HttpOnly | Secure | SameSite | Path | Max-Age |
+| --- | --- | --- | --- | --- | --- | --- |
+| `access_token` | access JWT | yes | `config.auth.cookieSecure` | Lax | `/` | access TTL |
+| `refresh_token` | refresh JWT | yes | `config.auth.cookieSecure` | Lax | `/api/auth/refresh` | refresh TTL |
+| `csrf_token` | random 32 bytes | **no** | `config.auth.cookieSecure` | Lax | `/` | refresh TTL |
+
+- Cookie Max-Age equals the token TTL (Notion: "TTL cookie синхронизирован с exp").
+- The refresh cookie is path-scoped so it reaches only the refresh endpoint.
+- Writing/clearing cookies lives in one `AuthCookies` helper; clearing uses the same attributes.
+- Tokens are never in response bodies, URLs or logs.
+
+## E-mail confirmation challenges
+
+One `challenges` table serves every confirmable action (decision A4):
+
+| Column | |
+| --- | --- |
+| `id` | uuid — returned to the client as `challengeId` |
+| `purpose` | `registration` \| `login` \| `password_reset` \| `email_change` \| `account_deletion` |
+| `user_id` | FK → users |
+| `code_hash` | HMAC-SHA256(`AUTH_OTP_PEPPER`, 6-digit code) |
+| `token_hash` | SHA-256 of the 32-byte magic-link token |
+| `payload` | jsonb, e.g. `{ newEmail }` for `email_change` |
+| `attempts` | wrong OTP entries |
+| `expires_at` / `consumed_at` / `last_sent_at` / `created_at` | timestamptz |
+
+- Code: `crypto.randomInt(0, 1_000_000)`, zero-padded. TTL 10 min, 5 wrong attempts → challenge
+  locked (423 `AUTH_OTP_LOCKED`), resend not more often than once per 60 s (429 with
+  `retryAfter`). A new challenge for the same user + purpose consumes the previous one.
+- Magic link: `${APP_PUBLIC_URL}/api/auth/confirm?token=<token>` (the exact form Notion gives); single use; bound to its challenge.
+- Every confirmation compares hashes with `crypto.timingSafeEqual` and sets `consumed_at` in the
+  same transaction as the action it confirms.
+- Which scenarios require confirmation is runtime config: `app_settings` keys
+  `confirmation.registration`, `confirmation.login`, `confirmation.password_reset` (decision A6).
+  `email_change` and `account_deletion` always require it (Notion).
+- Codes and links travel only in mail (via the outbox) — never in logs, responses or test output
+  other than the Mailpit sink.
+
+## Endpoints (`/api/auth`)
+
+| Endpoint | Auth | Result |
+| --- | --- | --- |
+| `GET /csrf` | public | sets `csrf_token`, 204 |
+| `POST /register` | public | confirmation off → 201 + user, cookies set; on → 202 `{ requiresConfirmation: true, challengeId }`, user `pending_verification` |
+| `POST /login` | public | confirmation off → 200 + user, cookies set; on → 202 `{ requiresConfirmation: true, challengeId }`, no cookies |
+| `POST /confirm` | public | `{ challengeId, code }` → completes the challenge's action (registration / login set cookies) |
+| `GET /confirm?token=` | public | magic-link variant of `POST /confirm` |
+| `POST /confirm/resend` | public | `{ challengeId }` → 202 |
+| `POST /refresh` | public (refresh cookie) | validates the refresh JWT, issues a new pair, 204 |
+| `POST /logout` | authenticated | clears cookies, 204 |
+| `GET /api/me` | authenticated | 200 current user |
+| `POST /password/forgot` | public | 202 always; mail with a `password_reset` challenge |
+| `POST /password/reset` | public | `{ challengeId, code \| token, password }` → sets password, increments `token_version`, 204 |
+
+## Refresh
+
+`POST /refresh`: read `refresh_token`, verify signature with the refresh secret, `typ`, `exp`;
+load the user; reject unless `status = active` and `ver = token_version`. Any failure → 401
+`AUTH_REFRESH_INVALID` and both cookies cleared. Success → new access + refresh JWT, new cookies.
+There are no further server-side checks (Notion: "Дополнительных серверных проверок по состоянию
+refresh нет").
+
+## CSRF — double submit
+
+- `CsrfGuard` (global) runs on every POST/PUT/PATCH/DELETE: `X-CSRF-Token` must equal the
+  `csrf_token` cookie (constant-time compare), else 403 `CSRF_INVALID`.
+- It applies to public endpoints too (login CSRF). The client calls `GET /api/auth/csrf` first;
+  login, confirm and refresh re-issue it.
+- `GET /api/auth/confirm?token=` is a GET and is therefore safe from CSRF by design; it must stay
+  idempotent per token (second use → 400 `AUTH_CHALLENGE_INVALID`).
+
+## Guards
+
+Global order: `ThrottlerGuard → CsrfGuard → JwtAuthGuard → PermissionGuard` (`03-nestjs`).
+
+- `JwtAuthGuard` reads `access_token` from the cookie, verifies it with the access secret, loads
+  the user (one indexed query), checks `status = active` and `ver`, puts
+  `AuthUser { id, roleIds }` on the request. Skipped by `@Public()`. Failure → 401
+  `AUTH_UNAUTHENTICATED`.
+- `PermissionGuard` checks `@RequirePermission(permission, action)` metadata against the RBAC
+  cache for the user's roles; no metadata = any authenticated user. Failure → 403
+  `AUTH_FORBIDDEN`.
+- `@CurrentUser()` gives the handler the `AuthUser`; the controller passes it to the service.
+
+## RBAC (DB-driven)
+
+- Tables `roles` (`name` unique), `permissions` (`name` unique, `actions text[]`), `grants`
+  (`role_id`, `permission_id`, `actions text[]` — empty = all actions of the permission; unique
+  `(role_id, permission_id)`), `user_roles` (`user_id`, `role_id`).
+- `RbacService` loads all roles, permissions and grants at startup into an immutable snapshot and
+  replaces it after every successful admin write (`/api/admin/rbac/roles|permissions|grants`,
+  CRUD per Notion). Check = any of the user's roles has a grant for the permission whose actions
+  are empty or contain the action.
+- Admin endpoints themselves require `@RequirePermission("rbac", "manage")`.
+- Seed (decision R3): role `admin` with grants on every permission, role `user` with none. Every
+  registered user gets `user`.
+
+## Self vs permission
+
+- A permission answers "may this user act on **other** users' resources". Self access to one's own
+  profile, history and files needs no permission.
+- The service decides, after loading the row:
+
+```ts
+const isSelf = actor.id === targetUserId;
+if (!isSelf && !this.rbac.can(actor, "users", "read")) {
+  throw new AppException(ErrorCode.AUTH_FORBIDDEN, HttpStatus.FORBIDDEN);
+}
+```
+
+- For the Self-only resources Notion lists 403 for a foreign id (history download "запись не
+  принадлежит пользователю" → 403); follow the page. Elsewhere prefer 404 when existence is a leak.
+
+## Account enumeration
+
+- Login failure is always 401 `AUTH_INVALID_CREDENTIALS`, same body and similar timing whether the
+  email exists or not (verify against a dummy argon2 hash when the user is missing).
+- Registration of a taken e-mail → 409 `USER_EMAIL_TAKEN` (decision A7). `password/forgot` and
+  `confirm/resend` always answer 202.
+
+## Rate limits (`@nestjs/throttler`)
+
+| Endpoint | Limit (default) | Tracker |
+| --- | --- | --- |
+| login | 5 / min, 20 / hour | IP + normalised email |
+| register, password/forgot, confirm/resend | 3 / min | IP |
+| confirm, password/reset | 10 / min | IP |
+| refresh | 30 / min | IP |
+| everything else | 100 / min | user id or IP |
+
+429 → `RATE_LIMITED` with `context.retryAfter`. `trust proxy` must be set behind a proxy.
+
+## Don't
+
+- Don't store refresh tokens, their hashes, `jti`s or session ids anywhere — database, cache, logs.
+- Don't return tokens in response bodies; the browser never needs to read them.
+- Don't compare secrets with `===`; use `crypto.timingSafeEqual` on equal-length buffers.
+- Don't decide ownership in a guard.
+- Don't hardcode role names in guards; routes declare permissions, roles get them through grants.
+- Don't log emails in full, codes, tokens, cookies or password hashes.

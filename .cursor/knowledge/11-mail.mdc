@@ -1,0 +1,149 @@
+---
+description: Transactional mail — MailService, SMTP transport, typed localised templates, outbox delivery, Mailpit
+alwaysApply: false
+---
+
+# Mail Knowledge
+
+## Shape
+
+```
+infrastructure/mail/
+  mail.module.ts
+  mail.service.ts            enqueue(tx, template, to, vars) + deliver(message)
+  mail-transport.ts          MailTransport interface + MAIL_TRANSPORT token
+  smtp.transport.ts          nodemailer adapter
+  template-registry.ts       template name → zod variables schema
+  template-renderer.ts       Handlebars: layout + per-locale subject/html/text
+  templates/
+    layouts/base.html.hbs
+    layouts/base.text.hbs
+    <template>/<locale>/{subject.hbs,html.hbs,text.hbs}
+```
+
+Modules call `MailService.enqueue()` only. Nothing outside `infrastructure/mail` imports nodemailer.
+
+```ts
+export interface MailTransport {
+  send(message: OutgoingMail): Promise<{ messageId: string }>;
+}
+export interface OutgoingMail {
+  from: string;
+  headers: Record<string, string>;
+  html: string;
+  subject: string;
+  text: string;
+  to: string;
+}
+```
+
+## SMTP transport
+
+One nodemailer SMTP transport, configured from the typed config (`10-config.mdc`):
+
+| Env | Meaning |
+| --- | --- |
+| `SMTP_HOST` | provider host |
+| `SMTP_PORT` | 587 (STARTTLS) or 465 (implicit TLS) |
+| `SMTP_SECURE` | `true` only for 465; `false` for 587 (STARTTLS is negotiated) |
+| `SMTP_USER` / `SMTP_PASS` | credentials, secrets |
+| `MAIL_FROM` | `"Product <no-reply@mail.example.com>"`, a domain you control |
+
+```ts
+createTransport({
+  auth: { pass: config.smtp.pass, user: config.smtp.user },
+  host: config.smtp.host,
+  pool: true,
+  port: config.smtp.port,
+  requireTLS: !config.smtp.secure && config.isProduction,
+  secure: config.smtp.secure,
+});
+```
+
+Provider is a config change, not a code change. turboSMTP is typically `pro.turbo-smtp.com`, port
+587 STARTTLS or 465 SSL — verify host, ports and auth mode with the provider's current docs. Amazon
+SES SMTP, Postmark, Mailgun, SendGrid and any other SMTP relay plug in the same way. A provider's
+HTTP API is only worth adopting for a feature SMTP cannot give (e.g. webhooks tied to message ids);
+then it is a second `MailTransport` adapter, not a change to callers.
+
+Dev and e2e: **Mailpit** from docker compose — `SMTP_HOST=localhost`, `SMTP_PORT=1025`,
+`SMTP_SECURE=false`, no auth. UI at `http://localhost:8025`, HTTP API at `/v1/messages`.
+
+## Templates
+
+One typed registry; a template cannot be enqueued with the wrong variables:
+
+```ts
+export const mailTemplates = {
+  "auth.otp": z.object({ code: z.string(), expiresInMinutes: z.number().int() }),
+  "auth.password-reset": z.object({ resetUrl: z.string().url() }),
+} as const;
+export type MailTemplate = keyof typeof mailTemplates;
+export type MailVars<T extends MailTemplate> = z.infer<(typeof mailTemplates)[T]>;
+```
+
+- Handlebars, one shared layout (header, footer, unsubscribe/legal line) for html and for text.
+- Every template has `subject`, `html` **and** `text` in **every** supported locale. A parity test
+  fails on a missing file (`13-i18n.mdc`).
+- Strings inside templates are the translation; there is no second catalogue for mail bodies.
+  Shared fragments (footer, greeting) live in `src/i18n/<locale>/mail.json`.
+- Use `{{var}}` (escaped). `{{{var}}}` only for HTML the server itself produced.
+- Links are built from `config.app.publicUrl`, never from the request `Host` header.
+- Inline CSS in the layout; no remote images that track opens unless the AC asks for it.
+
+## Sending — always via the outbox
+
+```ts
+await this.db.transaction(async (tx) => {
+  const user = await this.users.create(tx, dto);
+  await this.mail.enqueue(tx, "auth.otp", user, { code, expiresInMinutes: 10 });
+});
+```
+
+- `enqueue` validates vars with the registry schema, then writes an `outbox_messages` row of type
+  `mail.send` in the **same transaction** as the business write (`20-jobs.mdc`). No commit → no
+  mail; commit → mail eventually.
+- Locale is the recipient's stored `locale`, captured at enqueue time, not the request's
+  `X-Locale` (`13-i18n.mdc`).
+- The payload stores template, locale, recipient and vars — not rendered HTML. Rendering happens at
+  delivery, so a template fix applies to queued mail.
+- Idempotency key per message (`<template>:<entityId>:<purpose>`, unique index). Sent as
+  `X-Entity-Ref-ID` header too; the dispatcher never sends the same key twice.
+- The request returns without waiting for SMTP. An endpoint whose only job is to send mail returns
+  202.
+
+## Delivery, retries, failure
+
+- The outbox dispatcher calls `MailService.deliver()`: render → `transport.send()`.
+- Transient failures (connection, 4xx SMTP) → retry with exponential backoff; permanent (5xx
+  recipient rejected) → `dead` immediately. Max attempts → `dead`, alert on the dead count.
+- Log: outbox id, template, `messageId`, masked recipient (`j***@example.com`), attempt. Never the
+  full address, vars, codes, links or body.
+- Bounces and complaints: the provider reports them by webhook or a bounce mailbox. Store
+  suppressions (`mail_suppressions`: email hash, reason, created_at) and check them in `enqueue`;
+  a suppressed address is skipped and logged, not retried.
+
+## Testing
+
+- Unit: bind `MAIL_TRANSPORT` to a `FakeMailTransport` that records messages; assert template,
+  locale and vars. Render every template × locale with sample vars in one spec — it catches missing
+  variables and broken layouts.
+- e2e: real SMTP to Mailpit. Run the dispatcher tick, then read Mailpit's API
+  (`GET /v1/search?query=to:<address>`) and assert subject, locale and link. Clear with
+  `DELETE /v1/messages` in the reset helper. Use unique addresses per test.
+
+## Deliverability checklist (before production)
+
+- `MAIL_FROM` on a domain you own (a subdomain like `mail.example.com` isolates reputation).
+- SPF includes the provider; DKIM keys published and signing verified; DMARC record (`p=none` to
+  start, tighten after reports are clean).
+- Return-Path / bounce domain aligned per the provider's setup.
+- Text part present, no URL shorteners, no all-image mail.
+
+## Don't
+
+- Don't send mail inside a request handler or before the transaction commits.
+- Don't call nodemailer or a provider SDK from a module.
+- Don't hardcode subjects or bodies in TypeScript.
+- Don't log recipients, OTPs, tokens or reset links.
+- Don't render with the request locale for a mail the user reads later.
