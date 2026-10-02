@@ -215,7 +215,9 @@ describe('AuthService', () => {
 
   describe('refresh', () => {
     it('issues a new pair for a resolved session', async () => {
-      const { service } = setup({ resolved: { ok: true, user } });
+      const { service } = setup({
+        resolved: { ok: true, user: { ...user, roleIds: [] } },
+      });
 
       await expect(service.refresh('r')).resolves.toEqual(session);
       expect(log).toHaveBeenCalledWith(

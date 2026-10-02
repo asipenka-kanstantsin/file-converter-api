@@ -3,12 +3,12 @@ import { Reflector } from '@nestjs/core';
 
 import type { AuthenticatedRequest } from '@/common/decorators';
 import { ErrorCode } from '@/common/errors';
-import type { User } from '@/modules/users';
+import type { SessionUser } from '@/modules/users';
 
 import { JwtAuthGuard } from './jwt-auth.guard';
 import type { ResolvedSession, SessionResolver } from './session-resolver';
 
-const user = { id: 'u1' } as User;
+const user = { id: 'u1', roleIds: ['r1'] } as SessionUser;
 
 function contextFor(request: object): ExecutionContext {
   return {
@@ -59,7 +59,7 @@ describe('JwtAuthGuard', () => {
 
     await expect(guard.canActivate(contextFor(request))).resolves.toBe(true);
     expect(resolve).toHaveBeenCalledWith('access', 'jwt');
-    expect(request.user).toEqual({ id: 'u1' });
+    expect(request.user).toEqual({ id: 'u1', roleIds: ['r1'] });
   });
 
   it('answers 401 AUTH_UNAUTHENTICATED and logs the reason, not the token', async () => {

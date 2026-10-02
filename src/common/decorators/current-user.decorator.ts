@@ -10,6 +10,8 @@ import { AppException, ErrorCode } from '@/common/errors';
 // What the access-token guard proves about the caller (Notion "Авторизация" 1.3.1 step 5).
 export interface AuthUser {
   id: string;
+  // Explicitly assigned roles; the implicit `user` role is added by the RBAC check (R5).
+  roleIds: readonly string[];
 }
 
 export interface AuthenticatedRequest extends Request {

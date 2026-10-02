@@ -1,10 +1,16 @@
 import { TransactionHost } from '@nestjs-cls/transactional';
 import type { TransactionalAdapterPrisma } from '@nestjs-cls/transactional-adapter-prisma';
 import { Injectable } from '@nestjs/common';
+import { z } from 'zod';
 
 import type { PrismaService } from '@/infrastructure/database';
 
-import type { NewUser, User, UserCredentials } from './users.types';
+import type {
+  NewUser,
+  SessionUser,
+  User,
+  UserCredentials,
+} from './users.types';
 
 const userSelect = {
   createdAt: true,
@@ -78,6 +84,28 @@ export class UsersRepository {
       select: { id: true },
       where: { id },
     });
+  }
+
+  // One indexed query per authenticated request: the user and their role ids.
+  async findSessionUser(id: string): Promise<SessionUser | null> {
+    const row = await this.txHost.tx.user.findUnique({
+      select: { ...userSelect, roles: { select: { roleId: true } } },
+      where: { id },
+    });
+    if (!row) return null;
+    const { roles, ...user } = row;
+    return { ...user, roleIds: roles.map((role) => role.roleId) };
+  }
+
+  // FOR SHARE: the account cannot be deleted or change status until the transaction ends.
+  async lockForShare(id: string): Promise<User | null> {
+    const rows = z
+      .array(z.object({ id: z.string() }))
+      .parse(
+        await this.txHost.tx
+          .$queryRaw`SELECT id FROM users WHERE id = ${id}::uuid FOR SHARE`,
+      );
+    return rows.length === 0 ? null : this.findById(id);
   }
 
   async findById(id: string): Promise<User | null> {

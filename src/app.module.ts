@@ -23,6 +23,8 @@ import { OutboxModule } from '@/infrastructure/outbox';
 import { AuthModule, JwtAuthGuard } from '@/modules/auth';
 import { HealthModule } from '@/modules/health';
 import { OpenApiModule } from '@/modules/openapi';
+import { PermissionGuard, RbacModule } from '@/modules/rbac';
+import { SettingsModule } from '@/modules/settings';
 
 @Module({
   imports: [
@@ -48,6 +50,8 @@ import { OpenApiModule } from '@/modules/openapi';
     MailModule,
     OpenApiModule,
     OutboxModule,
+    RbacModule,
+    SettingsModule,
     ThrottlerModule.forRootAsync({
       inject: [AppConfig],
       useFactory: (config: AppConfig) => ({
@@ -60,10 +64,11 @@ import { OpenApiModule } from '@/modules/openapi';
     { provide: APP_INTERCEPTOR, useClass: ZodSerializerInterceptor },
     { provide: EXCEPTION_MAPPERS, useValue: [mapPrismaException] },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
-    // Order matters: throttling first, then CSRF, then the access token (03-nestjs).
+    // Order matters: throttling, CSRF, the access token, then the permission (03-nestjs).
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useExisting: JwtAuthGuard },
+    { provide: APP_GUARD, useExisting: PermissionGuard },
   ],
 })
 export class AppModule {}

@@ -21,6 +21,8 @@ info:
       and answer `401 AUTH_UNAUTHENTICATED` without one. When it expires, call
       `POST /api/auth/refresh` and repeat the request; a `401 AUTH_REFRESH_INVALID` there means
       signing in again.
+    - Operations under `/api/admin` also need a permission (`x-permission`, as
+      `permission@action`); a signed-in user whose roles lack it gets `403 AUTH_FORBIDDEN`.
     - Endpoints with a stricter rate-limit group also send `X-RateLimit-*-<group>` and
       `Retry-After-<group>` headers; every `429` carries plain `Retry-After`.
   license:
@@ -36,6 +38,12 @@ tags:
     description: Registration, sign-in, e-mail confirmation (OTP or magic link), session and CSRF.
   - name: users
     description: User accounts.
+  - name: rbac
+    description: >-
+      Roles, permissions and grants (role → permission → actions), stored in the database and
+      applied without a restart. Every signed-in account implicitly holds the `user` role.
+  - name: admin
+    description: Runtime settings.
 security: []
 
 paths:
@@ -491,6 +499,581 @@ paths:
         default:
           $ref: '#/components/responses/Default'
 
+  /api/admin/rbac/roles:
+    get:
+      operationId: rbac_listRoles
+      tags: [rbac]
+      summary: List roles
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+      responses:
+        '200':
+          description: All roles, by name.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    post:
+      operationId: rbac_createRole
+      tags: [rbac]
+      summary: Create a role
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleInput'
+      responses:
+        '201':
+          description: Created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '409':
+          $ref: '#/components/responses/RoleConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/admin/rbac/roles/{roleId}:
+    put:
+      operationId: rbac_updateRole
+      tags: [rbac]
+      summary: Update a role
+      description: |
+        Replaces name and description. The built-in roles `admin` and `user` cannot be renamed.
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RoleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleInput'
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '404':
+          $ref: '#/components/responses/RoleNotFound'
+        '409':
+          $ref: '#/components/responses/RoleConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    delete:
+      operationId: rbac_deleteRole
+      tags: [rbac]
+      summary: Delete a role
+      description: |
+        Refused (409 `RBAC_IN_USE`) while grants or users still hold the role; built-in roles cannot be
+        deleted (409 `RBAC_SYSTEM_ENTITY`).
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RoleId'
+      responses:
+        '204':
+          description: Deleted.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '404':
+          $ref: '#/components/responses/RoleNotFound'
+        '409':
+          $ref: '#/components/responses/InUseOrSystem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/admin/rbac/permissions:
+    get:
+      operationId: rbac_listPermissions
+      tags: [rbac]
+      summary: List permissions
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+      responses:
+        '200':
+          description: All permissions, by name.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    post:
+      operationId: rbac_createPermission
+      tags: [rbac]
+      summary: Create a permission
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PermissionInput'
+      responses:
+        '201':
+          description: Created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '409':
+          $ref: '#/components/responses/PermissionConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/admin/rbac/permissions/{permissionId}:
+    put:
+      operationId: rbac_updatePermission
+      tags: [rbac]
+      summary: Update a permission
+      description: |
+        Replaces name and actions. An action still listed by a grant cannot be removed
+        (409 `RBAC_ACTION_IN_USE`, `context.actions`). The permissions the API itself checks (`system: true`)
+        are read-only.
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PermissionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PermissionInput'
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '404':
+          $ref: '#/components/responses/PermissionNotFound'
+        '409':
+          $ref: '#/components/responses/PermissionConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    delete:
+      operationId: rbac_deletePermission
+      tags: [rbac]
+      summary: Delete a permission
+      description: |
+        Refused while grants reference it, and for built-in permissions.
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PermissionId'
+      responses:
+        '204':
+          description: Deleted.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '404':
+          $ref: '#/components/responses/PermissionNotFound'
+        '409':
+          $ref: '#/components/responses/InUseOrSystem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/admin/rbac/grants:
+    get:
+      operationId: rbac_listGrants
+      tags: [rbac]
+      summary: List grants
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+      responses:
+        '200':
+          description: All grants, oldest first.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrantList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    post:
+      operationId: rbac_createGrant
+      tags: [rbac]
+      summary: Grant a permission to a role
+      description: |
+        No or empty `actions` = every action of the permission; otherwise only the listed ones, which
+        must be actions of the permission (400 `RBAC_ACTION_NOT_ALLOWED`). One grant per role and
+        permission (409 `RBAC_GRANT_DUPLICATE`).
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantInput'
+      responses:
+        '201':
+          description: Created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrantEnvelope'
+        '400':
+          $ref: '#/components/responses/GrantInvalid'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '404':
+          $ref: '#/components/responses/GrantTargetNotFound'
+        '409':
+          $ref: '#/components/responses/GrantConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/admin/rbac/grants/{grantId}:
+    put:
+      operationId: rbac_updateGrant
+      tags: [rbac]
+      summary: Update a grant
+      description: |
+        The grant `admin → rbac` (`system: true`) keeps every action and cannot be moved.
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GrantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantInput'
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrantEnvelope'
+        '400':
+          $ref: '#/components/responses/GrantInvalid'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '404':
+          $ref: '#/components/responses/GrantTargetNotFound'
+        '409':
+          $ref: '#/components/responses/GrantConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    delete:
+      operationId: rbac_deleteGrant
+      tags: [rbac]
+      summary: Delete a grant
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GrantId'
+      responses:
+        '204':
+          description: Deleted.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '404':
+          $ref: '#/components/responses/GrantNotFound'
+        '409':
+          $ref: '#/components/responses/SystemEntity'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/admin/users/{userId}/roles:
+    get:
+      operationId: rbac_getUserRoles
+      tags: [rbac]
+      summary: A user's roles
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: The explicitly assigned roles.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRoles'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UserNotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    put:
+      operationId: rbac_setUserRoles
+      tags: [rbac]
+      summary: Replace a user's roles
+      description: |
+        Takes effect on the user's next request. The implicit `user` role cannot be assigned
+        (409 `RBAC_SYSTEM_ENTITY`), and the last holder of `admin` cannot lose it (409 `RBAC_LAST_ADMIN`).
+      x-permission: rbac@manage
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRolesInput'
+      responses:
+        '200':
+          description: The roles now assigned.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRoles'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '404':
+          $ref: '#/components/responses/UserOrRoleNotFound'
+        '409':
+          $ref: '#/components/responses/UserRolesConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
+  /api/admin/settings:
+    get:
+      operationId: admin_getSettings
+      tags: [admin]
+      summary: Runtime settings
+      x-permission: settings@manage
+      security:
+        - accessCookie: []
+      responses:
+        '200':
+          description: Every setting with its current value.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+    patch:
+      operationId: admin_updateSettings
+      tags: [admin]
+      summary: Change runtime settings
+      description: |
+        Switches e-mail confirmation per scenario without a deploy. Only the given keys change;
+        unknown keys are refused.
+      x-permission: settings@manage
+      security:
+        - accessCookie: []
+          csrfHeader: []
+          csrfCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsPatch'
+      responses:
+        '200':
+          description: Every setting after the change.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrf'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
 components:
   securitySchemes:
     accessCookie:
@@ -513,6 +1096,36 @@ components:
       in: header
       name: X-CSRF-Token
       description: Must equal the `csrf_token` cookie (double submit).
+
+  parameters:
+    RoleId:
+      name: roleId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PermissionId:
+      name: permissionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    GrantId:
+      name: grantId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
 
   headers:
     SetSessionCookies:
@@ -586,6 +1199,7 @@ components:
         - AUTH_CHALLENGE_LOCKED
         - AUTH_CHALLENGE_OTHER_BROWSER
         - AUTH_CODE_INVALID
+        - AUTH_FORBIDDEN
         - AUTH_INVALID_CREDENTIALS
         - AUTH_REFRESH_INVALID
         - AUTH_UNAUTHENTICATED
@@ -595,11 +1209,24 @@ components:
         - MALFORMED_REQUEST
         - PAYLOAD_TOO_LARGE
         - RATE_LIMITED
+        - RBAC_ACTION_IN_USE
+        - RBAC_ACTION_NOT_ALLOWED
+        - RBAC_GRANT_DUPLICATE
+        - RBAC_GRANT_NOT_FOUND
+        - RBAC_IN_USE
+        - RBAC_LAST_ADMIN
+        - RBAC_PERMISSION_NAME_TAKEN
+        - RBAC_PERMISSION_NOT_FOUND
+        - RBAC_ROLE_NAME_TAKEN
+        - RBAC_ROLE_NOT_FOUND
+        - RBAC_SYSTEM_ENTITY
         - REQUEST_REJECTED
         - ROUTE_NOT_FOUND
         - SERVICE_UNAVAILABLE
         - UNSUPPORTED_MEDIA_TYPE
         - USER_EMAIL_TAKEN
+        - USER_NOT_ACTIVE
+        - USER_NOT_FOUND
         - VALIDATION_FAILED
 
     ErrorEnvelope:
@@ -757,6 +1384,232 @@ components:
         user:
           $ref: '#/components/schemas/User'
 
+    RoleName:
+      type: string
+      pattern: '^[a-z][a-z0-9_-]{1,49}$'
+    PermissionName:
+      type: string
+      pattern: '^[a-z][a-z0-9.\-_]{1,63}$'
+    Action:
+      type: string
+      pattern: '^[a-z][a-z0-9_-]{0,31}$'
+    RoleInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          $ref: '#/components/schemas/RoleName'
+        description:
+          type: string
+          maxLength: 500
+    Role:
+      type: object
+      additionalProperties: false
+      required: [id, name, description, system, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: [string, 'null']
+        system:
+          type: boolean
+          description: Built in (`admin`, `user`); cannot be renamed or deleted.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    RoleEnvelope:
+      type: object
+      additionalProperties: false
+      required: [role]
+      properties:
+        role:
+          $ref: '#/components/schemas/Role'
+    RoleList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+    PermissionInput:
+      type: object
+      required: [name, actions]
+      properties:
+        name:
+          $ref: '#/components/schemas/PermissionName'
+        actions:
+          type: array
+          minItems: 1
+          maxItems: 32
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Action'
+    Permission:
+      type: object
+      additionalProperties: false
+      required: [id, name, actions, system, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        actions:
+          type: array
+          items:
+            type: string
+        system:
+          type: boolean
+          description: Checked by the API itself; read-only.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    PermissionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [permission]
+      properties:
+        permission:
+          $ref: '#/components/schemas/Permission'
+    PermissionList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Permission'
+    GrantInput:
+      type: object
+      required: [roleId, permissionId]
+      properties:
+        roleId:
+          type: string
+          format: uuid
+        permissionId:
+          type: string
+          format: uuid
+        actions:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          description: Omitted or empty = every action of the permission.
+          items:
+            $ref: '#/components/schemas/Action'
+    Grant:
+      type: object
+      additionalProperties: false
+      required: [id, roleId, permissionId, actions, system, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        roleId:
+          type: string
+          format: uuid
+        permissionId:
+          type: string
+          format: uuid
+        actions:
+          type: array
+          description: Empty = every action of the permission.
+          items:
+            type: string
+        system:
+          type: boolean
+          description: The protected grant `admin → rbac`.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    GrantEnvelope:
+      type: object
+      additionalProperties: false
+      required: [grant]
+      properties:
+        grant:
+          $ref: '#/components/schemas/Grant'
+    GrantList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Grant'
+    UserRolesInput:
+      type: object
+      required: [roleIds]
+      properties:
+        roleIds:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+    UserRoles:
+      type: object
+      additionalProperties: false
+      required: [userId, roleIds]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        roleIds:
+          type: array
+          description: Explicitly assigned roles; the implicit `user` role is not listed.
+          items:
+            type: string
+            format: uuid
+    Settings:
+      type: object
+      additionalProperties: false
+      required: [confirmation.login, confirmation.registration]
+      properties:
+        confirmation.login:
+          type: boolean
+          description: Sign-in needs an e-mailed code or link.
+        confirmation.registration:
+          type: boolean
+          description: Registration needs an e-mailed code or link.
+    SettingsEnvelope:
+      type: object
+      additionalProperties: false
+      required: [settings]
+      properties:
+        settings:
+          $ref: '#/components/schemas/Settings'
+    SettingsPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        confirmation.login:
+          type: boolean
+        confirmation.registration:
+          type: boolean
+
+    ErrorOrValidationEnvelope:
+      anyOf:
+        - $ref: '#/components/schemas/ValidationErrorEnvelope'
+        - $ref: '#/components/schemas/ErrorEnvelope'
+
     ChallengeId:
       type: string
       format: uuid
@@ -841,6 +1694,160 @@ components:
         No valid `access_token` cookie: missing, expired, tampered, or the account is no longer
         active or had its sessions revoked. Refresh the session and repeat the request.
       x-error-codes: [AUTH_UNAUTHENTICATED]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: The caller's roles lack the operation's permission (`x-permission`).
+      x-error-codes: [AUTH_FORBIDDEN]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ForbiddenOrCsrf:
+      description: The caller's roles lack the permission, or the CSRF check failed.
+      x-error-codes: [AUTH_FORBIDDEN, CSRF_INVALID]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    RoleNotFound:
+      description: No role with this id.
+      x-error-codes: [RBAC_ROLE_NOT_FOUND]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    PermissionNotFound:
+      description: No permission with this id.
+      x-error-codes: [RBAC_PERMISSION_NOT_FOUND]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    GrantNotFound:
+      description: No grant with this id.
+      x-error-codes: [RBAC_GRANT_NOT_FOUND]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    GrantTargetNotFound:
+      description: No such grant, role or permission.
+      x-error-codes: [RBAC_GRANT_NOT_FOUND, RBAC_PERMISSION_NOT_FOUND, RBAC_ROLE_NOT_FOUND]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    UserNotFound:
+      description: No user with this id.
+      x-error-codes: [USER_NOT_FOUND]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    UserOrRoleNotFound:
+      description: No such user, or a listed role does not exist (`context.roleId`).
+      x-error-codes: [RBAC_ROLE_NOT_FOUND, USER_NOT_FOUND]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    RoleConflict:
+      description: The name is taken, or a built-in role would be renamed.
+      x-error-codes: [RBAC_ROLE_NAME_TAKEN, RBAC_SYSTEM_ENTITY]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    PermissionConflict:
+      description: The name is taken, an action to remove is still granted (`context.actions`), or the permission is built in.
+      x-error-codes: [RBAC_ACTION_IN_USE, RBAC_PERMISSION_NAME_TAKEN, RBAC_SYSTEM_ENTITY]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    GrantConflict:
+      description: >-
+        The role already has a grant for this permission, the protected grant would change, or
+        `rbac` would go to the implicit `user` role (every account would become an admin).
+      x-error-codes: [RBAC_GRANT_DUPLICATE, RBAC_SYSTEM_ENTITY]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    GrantInvalid:
+      description: Invalid input, or actions the permission does not have (`context.actions`).
+      x-error-codes: [RBAC_ACTION_NOT_ALLOWED, VALIDATION_FAILED]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorOrValidationEnvelope'
+    InUseOrSystem:
+      description: Still referenced by grants or users, or built in.
+      x-error-codes: [RBAC_IN_USE, RBAC_SYSTEM_ENTITY]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    SystemEntity:
+      description: The protected grant cannot be deleted.
+      x-error-codes: [RBAC_SYSTEM_ENTITY]
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    UserRolesConflict:
+      description: >-
+        The implicit `user` role was listed, the last active admin would lose `admin`, or the
+        account has not confirmed its registration (only active accounts hold roles).
+      x-error-codes: [RBAC_LAST_ADMIN, RBAC_SYSTEM_ENTITY, USER_NOT_ACTIVE]
       headers:
         X-Request-Id:
           $ref: '#/components/headers/RequestId'

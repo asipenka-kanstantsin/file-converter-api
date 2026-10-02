@@ -12,6 +12,10 @@ export interface User {
   tokenVersion: number;
 }
 
+export interface SessionUser extends User {
+  roleIds: string[];
+}
+
 export interface UserCredentials {
   passwordHash: string;
   user: User;

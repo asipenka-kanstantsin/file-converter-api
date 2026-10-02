@@ -35,7 +35,9 @@ describe('access-token requirement vs openapi/openapi.yaml', () => {
   });
 
   it('answers 401 without a session exactly where the contract requires a token', async () => {
-    const { agent, csrf } = await csrfClient(app);
+    const client = await csrfClient(app);
+    const { agent } = client;
+    let { csrf } = client;
     const mismatches: string[] = [];
 
     for (const route of registeredRoutes(app)) {
@@ -46,11 +48,19 @@ describe('access-token requirement vs openapi/openapi.yaml', () => {
       ](url)
         .set('X-CSRF-Token', csrf)
         .send({});
+      // GET /api/auth/csrf rotates the token; keep echoing the current one.
+      const rotated = ([] as string[])
+        .concat(res.headers['set-cookie'] ?? [])
+        .map((cookie) => /^csrf_token=([^;]+)/.exec(cookie)?.[1])
+        .find((value) => value !== undefined);
+      if (rotated) csrf = rotated;
       const unauthenticated =
         res.status === 401 &&
         (res.body as { code?: unknown }).code === 'AUTH_UNAUTHENTICATED';
       if (unauthenticated !== needsAccessToken(route)) {
-        mismatches.push(`${route} → ${String(res.status)}`);
+        mismatches.push(
+          `${route} → ${String(res.status)} ${JSON.stringify(res.body)}`,
+        );
       }
     }
 

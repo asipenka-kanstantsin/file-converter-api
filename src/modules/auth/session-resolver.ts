@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
-import { type User, UsersService } from '@/modules/users';
+import { type SessionUser, UsersService } from '@/modules/users';
 
 import {
   SessionTokenService,
@@ -13,7 +13,7 @@ export type SessionFailure =
 
 export type ResolvedSession =
   | { failure: SessionFailure; ok: false; userId?: string }
-  | { ok: true; user: User };
+  | { ok: true; user: SessionUser };
 
 // Token → user, shared by the access guard and refresh (Notion "Авторизация" 1.3.1 steps 2–4).
 // The user must still exist, be active and carry the token's version: deleting the account or
@@ -33,7 +33,7 @@ export class SessionResolver {
     const verified = await this.tokens.verify(type, token);
     if (!verified.ok) return verified;
     const { id, tokenVersion } = verified.subject;
-    const user = await this.users.findById(id);
+    const user = await this.users.findSessionUser(id);
     if (!user) return { failure: 'user_not_found', ok: false, userId: id };
     if (user.status !== 'active') {
       return { failure: 'inactive', ok: false, userId: id };

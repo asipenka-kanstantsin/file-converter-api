@@ -27,8 +27,62 @@ model User {
   createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
   challenges   Challenge[]
+  roles        UserRole[]
 
   @@map("users")
+}
+
+// RBAC configuration (Notion "RBAC", decisions R1-R5), cached in memory by RbacService.
+model Role {
+  id          String     @id @default(uuid(7)) @db.Uuid
+  name        String     @unique(map: "roles_name_key") @db.VarChar(50)
+  description String?    @db.VarChar(500)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  grants      Grant[]
+  users       UserRole[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  name      String   @unique(map: "permissions_name_key") @db.VarChar(64)
+  actions   String[] @db.VarChar(32)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  grants    Grant[]
+
+  @@map("permissions")
+}
+
+// Role -> permission -> actions; empty actions = every action of the permission.
+model Grant {
+  id           String     @id @default(uuid(7)) @db.Uuid
+  roleId       String     @map("role_id") @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Restrict, map: "grants_role_id_fkey")
+  permissionId String     @map("permission_id") @db.Uuid
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict, map: "grants_permission_id_fkey")
+  actions      String[]   @default([]) @db.VarChar(32)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([roleId, permissionId], map: "grants_role_id_permission_id_key")
+  @@index([permissionId], map: "grants_permission_id_idx")
+  @@map("grants")
+}
+
+// Roles assigned to a user explicitly; the implicit `user` role is never stored (R5).
+model UserRole {
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleId    String   @map("role_id") @db.Uuid
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Restrict, map: "user_roles_role_id_fkey")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([userId, roleId], map: "user_roles_pkey")
+  @@index([roleId], map: "user_roles_role_id_idx")
+  @@map("user_roles")
 }
 
 enum ChallengePurpose {

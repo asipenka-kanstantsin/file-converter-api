@@ -14,6 +14,7 @@ export const ERROR_MESSAGES = {
   [ErrorCode.AUTH_CHALLENGE_OTHER_BROWSER]:
     'Open the sign-in link in the browser where you started signing in, or enter the code.',
   [ErrorCode.AUTH_CODE_INVALID]: 'The code is incorrect.',
+  [ErrorCode.AUTH_FORBIDDEN]: "You don't have permission to do this.",
   [ErrorCode.AUTH_INVALID_CREDENTIALS]: 'The e-mail or password is incorrect.',
   [ErrorCode.AUTH_REFRESH_INVALID]:
     'Your session has ended. Please sign in again.',
@@ -24,12 +25,32 @@ export const ERROR_MESSAGES = {
   [ErrorCode.MALFORMED_REQUEST]: 'The request could not be parsed.',
   [ErrorCode.PAYLOAD_TOO_LARGE]: 'The request body is too large.',
   [ErrorCode.RATE_LIMITED]: 'Too many requests. Please retry later.',
+  [ErrorCode.RBAC_ACTION_IN_USE]:
+    'Some of the removed actions are still granted. Change those grants first.',
+  [ErrorCode.RBAC_ACTION_NOT_ALLOWED]:
+    'The permission does not have some of these actions.',
+  [ErrorCode.RBAC_GRANT_DUPLICATE]:
+    'This role already has a grant for this permission.',
+  [ErrorCode.RBAC_GRANT_NOT_FOUND]: 'The grant does not exist.',
+  [ErrorCode.RBAC_IN_USE]:
+    'It is still used by grants or users. Remove those first.',
+  [ErrorCode.RBAC_LAST_ADMIN]: 'At least one user must keep the admin role.',
+  [ErrorCode.RBAC_PERMISSION_NAME_TAKEN]:
+    'A permission with this name already exists.',
+  [ErrorCode.RBAC_PERMISSION_NOT_FOUND]: 'The permission does not exist.',
+  [ErrorCode.RBAC_ROLE_NAME_TAKEN]: 'A role with this name already exists.',
+  [ErrorCode.RBAC_ROLE_NOT_FOUND]: 'The role does not exist.',
+  [ErrorCode.RBAC_SYSTEM_ENTITY]:
+    'Built-in roles, permissions and grants cannot be changed this way.',
   [ErrorCode.REQUEST_REJECTED]: 'The request was rejected.',
   [ErrorCode.ROUTE_NOT_FOUND]: 'The requested resource does not exist.',
   [ErrorCode.SERVICE_UNAVAILABLE]: 'The service is temporarily unavailable.',
   [ErrorCode.UNSUPPORTED_MEDIA_TYPE]:
     'The request content type or encoding is not supported.',
   [ErrorCode.USER_EMAIL_TAKEN]: 'This e-mail is already registered.',
+  [ErrorCode.USER_NOT_ACTIVE]:
+    'The account has not confirmed its registration and cannot hold roles yet.',
+  [ErrorCode.USER_NOT_FOUND]: 'The user does not exist.',
   [ErrorCode.VALIDATION_FAILED]: 'Some fields are invalid.',
 } as const satisfies Record<ErrorCode, string>;
 

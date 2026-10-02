@@ -1,12 +1,13 @@
-import type { User, UsersService } from '@/modules/users';
+import type { SessionUser, UsersService } from '@/modules/users';
 
 import { SessionResolver } from './session-resolver';
 import type { SessionTokenService, VerifiedToken } from './session-tokens';
 
-const user: User = {
+const user: SessionUser = {
   createdAt: new Date(),
   email: 'jane@example.com',
   id: 'u1',
+  roleIds: ['r1'],
   status: 'active',
   tokenVersion: 2,
 };
@@ -18,7 +19,7 @@ const valid: VerifiedToken = {
 
 function resolver(
   verified: VerifiedToken,
-  found: User | null,
+  found: SessionUser | null,
 ): { findById: jest.Mock; resolver: SessionResolver } {
   const findById = jest.fn().mockResolvedValue(found);
   return {
@@ -27,7 +28,7 @@ function resolver(
       {
         verify: () => Promise.resolve(verified),
       } as unknown as SessionTokenService,
-      { findById } as unknown as UsersService,
+      { findSessionUser: findById } as unknown as UsersService,
     ),
   };
 }

@@ -8,5 +8,6 @@ export const FLAGS = {
 } as const satisfies Record<string, boolean>;
 
 export type FlagKey = keyof typeof FLAGS;
+export type Flags = Record<FlagKey, boolean>;
 
 export const flagValueSchema = z.boolean();

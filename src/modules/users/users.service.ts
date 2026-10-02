@@ -3,7 +3,12 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { AppException, ErrorCode } from '@/common/errors';
 
 import { UsersRepository } from './users.repository';
-import type { NewUser, User, UserCredentials } from './users.types';
+import type {
+  NewUser,
+  SessionUser,
+  User,
+  UserCredentials,
+} from './users.types';
 
 @Injectable()
 export class UsersService {
@@ -38,6 +43,14 @@ export class UsersService {
 
   findById(id: string): Promise<User | null> {
     return this.usersRepository.findById(id);
+  }
+
+  lockForShare(id: string): Promise<User | null> {
+    return this.usersRepository.lockForShare(id);
+  }
+
+  findSessionUser(id: string): Promise<SessionUser | null> {
+    return this.usersRepository.findSessionUser(id);
   }
 
   findCredentialsByEmail(email: string): Promise<UserCredentials | null> {

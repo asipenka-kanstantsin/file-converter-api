@@ -6,7 +6,7 @@ import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020';
 import type { Response } from 'supertest';
 import { parse } from 'yaml';
 
-type HttpMethod = 'delete' | 'get' | 'patch' | 'post' | 'put';
+export type HttpMethod = 'delete' | 'get' | 'patch' | 'post' | 'put';
 
 interface HeaderObject {
   required?: boolean;

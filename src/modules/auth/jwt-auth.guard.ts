@@ -56,7 +56,7 @@ export class JwtAuthGuard implements CanActivate {
         HttpStatus.UNAUTHORIZED,
       );
     }
-    request.user = { id: session.user.id };
+    request.user = { id: session.user.id, roleIds: session.user.roleIds };
     return true;
   }
 }

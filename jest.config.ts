@@ -18,6 +18,7 @@ const config: Config = {
     '!src/**/index.ts',
     '!src/generated/**',
     '!src/main.ts',
+    '!src/cli/**',
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text-summary', 'lcov'],

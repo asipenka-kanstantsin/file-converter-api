@@ -111,7 +111,7 @@ Global order: `ThrottlerGuard → CsrfGuard → JwtAuthGuard → PermissionGuard
 - `JwtAuthGuard` (global, deny by default — A19) reads `access_token` from the cookie;
   `SessionResolver` verifies it with the access secret (HS256 only, `iss`, `aud`, `typ`), loads
   the user (one indexed query), checks `status = active` and `ver`; the guard puts
-  `AuthUser { id }` on the request (FC-4 adds roles). Skipped by `@Public()` (controller or
+  `AuthUser { id, roleIds }` on the request (explicit roles only, R5). Skipped by `@Public()` (controller or
   handler). Every failure → 401 `AUTH_UNAUTHENTICATED`; the reason (`missing`, `invalid`,
   `expired`, `wrong_type`, `user_not_found`, `inactive`, `revoked`) is logged, the token never.
 - The request log line carries `userId` once the guard has run (`requestUser` in
@@ -123,16 +123,23 @@ Global order: `ThrottlerGuard → CsrfGuard → JwtAuthGuard → PermissionGuard
 
 ## RBAC (DB-driven)
 
-- Tables `roles` (`name` unique), `permissions` (`name` unique, `actions text[]`), `grants`
-  (`role_id`, `permission_id`, `actions text[]` — empty = all actions of the permission; unique
-  `(role_id, permission_id)`), `user_roles` (`user_id`, `role_id`).
-- `RbacService` loads all roles, permissions and grants at startup into an immutable snapshot and
-  replaces it after every successful admin write (`/api/admin/rbac/roles|permissions|grants`,
-  CRUD per Notion). Check = any of the user's roles has a grant for the permission whose actions
-  are empty or contain the action.
-- Admin endpoints themselves require `@RequirePermission("rbac", "manage")`.
-- Seed (decision R3): role `admin` with grants on every permission, role `user` with none. Every
-  registered user gets `user`.
+- Tables `roles` (`name` unique), `permissions` (`name` unique, `actions text[]`, at least one),
+  `grants` (`role_id`, `permission_id`, `actions text[]` — empty = all actions of the permission;
+  unique `(role_id, permission_id)`), `user_roles` (`user_id`, `role_id`). Deletes are
+  `RESTRICT` (R4).
+- `RbacService` holds an immutable snapshot (role → permission → actions), loaded at startup and
+  reloaded after every successful admin write (`/api/admin/rbac/roles|permissions|grants`,
+  `/api/admin/users/{userId}/roles`). Reloads are serialised; a failed one is retried (R9).
+  Check = the permission exists with that action, and one of the user's roles (plus the implicit
+  `user` role, R5) has a grant on it whose actions are empty or contain the action.
+- `PERMISSIONS` (`common/decorators/require-permission.decorator.ts`) is the catalog of what the
+  code checks; `@RequirePermission` only accepts its names and actions. Startup creates missing
+  ones (with an admin grant), keeps their actions in line with the code and restores
+  `admin → rbac` (R6). A new permission for a route = a new catalog entry, nothing else.
+- Admin endpoints themselves require `@RequirePermission("rbac", "manage")`; settings use
+  `settings@manage`.
+- Built-in roles `admin` and `user` (implicit). The first admin: `npm run admin:grant -- <email>`
+  (R7).
 
 ## Self vs permission
 

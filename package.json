@@ -26,6 +26,7 @@
     "db:generate": "prisma migrate dev --create-only",
     "db:seed": "prisma db seed",
     "requirements:fetch": "node scripts/fetch-requirements.mjs",
+    "admin:grant": "node dist/cli/grant-admin.js",
     "postinstall": "prisma generate",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run openapi:lint && npm run test:cov && npm run build && node -e \"require('node:fs').accessSync('dist/main.js')\""
   },
