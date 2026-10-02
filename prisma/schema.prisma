@@ -37,6 +37,8 @@ model User {
   challenges   Challenge[]
   roles        UserRole[]
 
+  @@index([createdAt, id], map: "users_created_at_id_idx")
+  @@index([status, createdAt, id], map: "users_status_created_at_id_idx")
   @@map("users")
 }
 

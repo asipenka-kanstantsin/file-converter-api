@@ -3,8 +3,17 @@ import type { TransactionalAdapterPrisma } from '@nestjs-cls/transactional-adapt
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
+import { Prisma } from '@/generated/prisma/client';
 import type { PrismaService } from '@/infrastructure/database';
 
+import {
+  decodeCursor,
+  encodeCursor,
+  likePrefix,
+  searchHash,
+  type UserListQuery,
+} from './users-list';
+import { userStatusSchema } from './users.types';
 import type {
   NewUser,
   SessionUser,
@@ -12,6 +21,20 @@ import type {
   UserChanges,
   UserCredentials,
 } from './users.types';
+
+const listRowsSchema = z.array(
+  z.object({
+    created_at: z.date(),
+    display_name: z.string().nullable(),
+    email: z.string(),
+    id: z.string(),
+    last_login_at: z.date().nullable(),
+    photo_file_id: z.string().nullable(),
+    sort_key: z.string(),
+    status: userStatusSchema,
+    token_version: z.number().int(),
+  }),
+);
 
 const userSelect = {
   createdAt: true,
@@ -164,6 +187,82 @@ export class UsersRepository {
           .$queryRaw`SELECT id FROM users WHERE id = ${id}::uuid FOR SHARE`,
       );
     return rows.length === 0 ? null : this.findById(id);
+  }
+
+  // Notion "Просмотр списка всех пользователей" (decisions L1, L2): keyset pagination on the
+  // sort key + id, prefix search on indexed columns only, deleted accounts only when asked for.
+  async list(
+    query: UserListQuery,
+  ): Promise<{ items: User[]; nextCursor: null | string }> {
+    const sortKey = {
+      created_at: Prisma.sql`created_at`,
+      email: Prisma.sql`email`,
+      last_login: Prisma.sql`COALESCE(last_login_at, '-infinity'::timestamptz)`,
+    }[query.sort];
+    const keyType =
+      query.sort === 'email' ? Prisma.sql`text` : Prisma.sql`timestamptz`;
+    // The cursor key in a fixed form, whatever the session's DateStyle or TimeZone.
+    const keyText =
+      query.sort === 'email'
+        ? sortKey
+        : Prisma.sql`CASE WHEN isfinite(${sortKey}) THEN to_char(${sortKey} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') ELSE '-infinity' END`;
+    const direction =
+      query.order === 'asc' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+    const after = query.order === 'asc' ? Prisma.sql`>` : Prisma.sql`<`;
+    const conditions: Prisma.Sql[] = [
+      query.status === undefined
+        ? Prisma.sql`status <> 'deleted'`
+        : Prisma.sql`status = ${query.status}::user_status`,
+    ];
+    if (query.q !== undefined) {
+      const id = z.uuid().safeParse(query.q.toLowerCase());
+      // Lowercased by Postgres on both sides, so the two never disagree on a character.
+      conditions.push(
+        id.success
+          ? Prisma.sql`id = ${id.data}::uuid`
+          : Prisma.sql`(lower(email) LIKE lower(${likePrefix(query.q)}) OR lower(display_name) LIKE lower(${likePrefix(query.q)}))`,
+      );
+    }
+    const cursor = decodeCursor(query);
+    if (cursor) {
+      conditions.push(
+        Prisma.sql`(${sortKey}, id) ${after} (${cursor.key}::${keyType}, ${cursor.id}::uuid)`,
+      );
+    }
+    const rows = listRowsSchema.parse(
+      await this.txHost.tx.$queryRaw`
+        SELECT id, email, display_name, status::text AS status, created_at, last_login_at,
+               photo_file_id, token_version, ${keyText} AS sort_key
+          FROM users
+         WHERE ${Prisma.join(conditions, ' AND ')}
+         ORDER BY ${sortKey} ${direction}, id ${direction}
+         LIMIT ${query.limit + 1}`,
+    );
+    const page = rows.slice(0, query.limit);
+    const last = page.at(-1);
+    return {
+      items: page.map((row) => ({
+        createdAt: row.created_at,
+        displayName: row.display_name,
+        email: row.email,
+        id: row.id,
+        lastLoginAt: row.last_login_at,
+        photoFileId: row.photo_file_id,
+        status: row.status,
+        tokenVersion: row.token_version,
+      })),
+      nextCursor:
+        rows.length > query.limit && last
+          ? encodeCursor({
+              id: last.id,
+              key: last.sort_key,
+              order: query.order,
+              q: searchHash(query.q),
+              sort: query.sort,
+              status: query.status,
+            })
+          : null,
+    };
   }
 
   // A deleted account is a tombstone (D1): to everything but deletion itself it does not exist.

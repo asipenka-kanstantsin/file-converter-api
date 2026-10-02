@@ -70,8 +70,9 @@ GET /api/admin/users?limit=20&cursor=eyJ2IjoiMjAyNi0wOS0yOFQxMDowMDowMFoiLCJpZCI
 - **Cursor pagination everywhere** (Notion pages, decision H2). No `offset`, no `total` — a count
   per page is an extra query the spec does not ask for.
 - `limit` default 20, max 100, enforced by `CursorPaginationQueryDto`.
-- The cursor is opaque base64url JSON `{ v: <sort value>, id }`, built and parsed only by
-  `common/pagination`. A malformed cursor → 400 `VALIDATION_FAILED`.
+- The cursor is opaque base64url JSON: the last sort key (validated per sort before any SQL), the
+  id, and the sort/order/filters it was issued for (search text only as a hash). A malformed,
+  forged or foreign cursor → 400 `PAGINATION_CURSOR_INVALID` (decision L2).
 - Order is always `(<sort column>, id)` so pages are stable with equal sort values; the query is
   `WHERE (sort, id) < (:v, :id)` (or `>` for `asc`) with `take: limit + 1` to detect the next page.
 - `sort` is a whitelist per endpoint, never a raw column name from the client; the cursor encodes

@@ -1432,6 +1432,99 @@ paths:
         default:
           $ref: '#/components/responses/Default'
 
+
+  /api/admin/users:
+    get:
+      operationId: admin_listUsers
+      tags: [admin]
+      summary: List users
+      description: |
+        Cursor-paginated (`nextCursor`; `null` on the last page). The cursor is tied to the sort,
+        order, `q` and `status` it was issued for; reuse with others answers 400
+        `PAGINATION_CURSOR_INVALID`. `q` matches an exact id, or the start of the e-mail or the
+        display name (case-insensitive). Deleted accounts appear only with `status=deleted`.
+        Sorting by `last_login` puts accounts that never signed in last (`desc`) or first (`asc`).
+      x-permission: users@list
+      security:
+        - accessCookie: []
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor from the previous page.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 1000
+        - name: limit
+          in: query
+          required: false
+          description: Page size.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: q
+          in: query
+          required: false
+          description: 'Search (trimmed): an id, or the start of an e-mail or display name.'
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+        - name: status
+          in: query
+          required: false
+          description: Only accounts with this status.
+          schema:
+            type: string
+            enum: [active, blocked, deleted, pending_verification]
+        - name: sort
+          in: query
+          required: false
+          description: Sort key.
+          schema:
+            type: string
+            enum: [created_at, email, last_login]
+            default: created_at
+        - name: order
+          in: query
+          required: false
+          description: Sort direction.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        '200':
+          description: One page of users.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserList'
+        '400':
+          description: Invalid parameters or cursor.
+          x-error-codes: [PAGINATION_CURSOR_INVALID, VALIDATION_FAILED]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOrValidationEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
   /api/admin/users/{userId}/roles:
     get:
       operationId: rbac_getUserRoles
@@ -1711,6 +1804,7 @@ components:
         - FILE_TYPE_NOT_SUPPORTED
         - INTERNAL_ERROR
         - MALFORMED_REQUEST
+        - PAGINATION_CURSOR_INVALID
         - PAYLOAD_TOO_LARGE
         - PHOTO_NOT_FOUND
         - RATE_LIMITED
@@ -2207,6 +2301,40 @@ components:
               properties:
                 maxBytes:
                   type: integer
+
+    UserListItem:
+      type: object
+      additionalProperties: false
+      required: [id, email, photo, createdAt, status, lastLoginAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        photo:
+          type: [string, 'null']
+          description: API path of the photo, never a storage URL.
+        createdAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [active, blocked, deleted, pending_verification]
+        lastLoginAt:
+          type: [string, 'null']
+          format: date-time
+    UserList:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserListItem'
+        nextCursor:
+          type: [string, 'null']
 
     ErrorOrValidationEnvelope:
       anyOf:

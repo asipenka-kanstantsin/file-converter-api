@@ -7,11 +7,12 @@ import { UsersModule } from '@/modules/users';
 
 import { AccountsController } from './accounts.controller';
 import { AccountsService } from './accounts.service';
+import { AdminUsersController } from './admin-users.controller';
 
 // User-facing operations on one account (view, change, delete) that need both the users and
 // the RBAC modules; kept apart so neither of those depends on the other.
 @Module({
-  controllers: [AccountsController],
+  controllers: [AccountsController, AdminUsersController],
   imports: [AuthModule, FilesModule, RbacModule, UsersModule],
   providers: [AccountsService],
 })

@@ -3,6 +3,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { AppException, ErrorCode } from '@/common/errors';
 import { AppConfig } from '@/config';
 
+import type { UserListQuery } from './users-list';
 import { UsersRepository } from './users.repository';
 import type {
   NewUser,
@@ -88,6 +89,12 @@ export class UsersService {
 
   setPhoto(id: string, fileId: null | string): Promise<void> {
     return this.usersRepository.setPhoto(id, fileId);
+  }
+
+  list(
+    query: UserListQuery,
+  ): Promise<{ items: User[]; nextCursor: null | string }> {
+    return this.usersRepository.list(query);
   }
 
   findById(id: string): Promise<User | null> {

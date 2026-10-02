@@ -28,6 +28,8 @@ export const ERROR_MESSAGES = {
   [ErrorCode.FILE_TYPE_NOT_SUPPORTED]: 'This file type is not supported.',
   [ErrorCode.INTERNAL_ERROR]: 'Something went wrong. Please try again later.',
   [ErrorCode.MALFORMED_REQUEST]: 'The request could not be parsed.',
+  [ErrorCode.PAGINATION_CURSOR_INVALID]:
+    'The page cursor is invalid or belongs to other filters. Start from the first page.',
   [ErrorCode.PAYLOAD_TOO_LARGE]: 'The request body is too large.',
   [ErrorCode.PHOTO_NOT_FOUND]: 'The user has no photo.',
   [ErrorCode.RATE_LIMITED]: 'Too many requests. Please retry later.',
