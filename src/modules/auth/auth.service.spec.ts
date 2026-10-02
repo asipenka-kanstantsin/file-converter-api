@@ -21,8 +21,10 @@ jest.mock('@nestjs-cls/transactional', () => ({
 
 const user: User = {
   createdAt: new Date(),
+  displayName: null,
   email: 'jane@example.com',
   id: 'u1',
+  lastLoginAt: null,
   status: 'active',
   tokenVersion: 2,
 };

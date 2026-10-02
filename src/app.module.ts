@@ -20,6 +20,7 @@ import {
 } from '@/infrastructure/database';
 import { MailModule } from '@/infrastructure/mail';
 import { OutboxModule } from '@/infrastructure/outbox';
+import { AccountsModule } from '@/modules/accounts';
 import { AuthModule, JwtAuthGuard } from '@/modules/auth';
 import { HealthModule } from '@/modules/health';
 import { OpenApiModule } from '@/modules/openapi';
@@ -28,6 +29,7 @@ import { SettingsModule } from '@/modules/settings';
 
 @Module({
   imports: [
+    AccountsModule,
     AppConfigModule,
     AuthModule,
     ClsModule.forRoot({

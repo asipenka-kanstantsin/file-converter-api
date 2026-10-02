@@ -14,8 +14,10 @@ import type {
 
 const userSelect = {
   createdAt: true,
+  displayName: true,
   email: true,
   id: true,
+  lastLoginAt: true,
   status: true,
   tokenVersion: true,
 } as const;

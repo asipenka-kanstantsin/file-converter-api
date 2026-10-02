@@ -40,6 +40,7 @@ export class AppConfig {
     loginBlockSeconds: number;
     loginLimit: number;
     mailLimit: number;
+    profileLimit: number;
     ttlSeconds: number;
   };
 }
@@ -88,6 +89,7 @@ export function buildAppConfig(env: Env): AppConfig {
       loginBlockSeconds: env.THROTTLE_LOGIN_BLOCK_SECONDS,
       loginLimit: env.THROTTLE_LOGIN_LIMIT,
       mailLimit: env.THROTTLE_MAIL_LIMIT,
+      profileLimit: env.THROTTLE_PROFILE_LIMIT,
       ttlSeconds: env.THROTTLE_TTL_SECONDS,
     }),
   });

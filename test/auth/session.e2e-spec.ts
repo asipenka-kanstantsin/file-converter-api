@@ -116,6 +116,7 @@ describe('session (access guard, refresh, logout)', () => {
 
       expectContract('get', '/api/me', res);
       expect(res.status).toBe(200);
+      expect(res.headers['cache-control']).toBe('no-store');
       expect(res.body).toMatchObject({
         user: { id: userId, status: 'active' },
       });

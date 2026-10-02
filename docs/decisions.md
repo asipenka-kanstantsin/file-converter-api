@@ -90,6 +90,14 @@ Branches use `<type>/<TASK-ID>_<short_description>` (`16-git.mdc`). Ids map to N
 | R8 | `GET/PUT /api/admin/users/{userId}/roles` (permission `rbac@manage`) lists and replaces a user's explicit roles. Notion makes a user "носитель одной или нескольких ролей" but defines no endpoint; this fills the gap. Roles are read from the DB on every request, so a change applies on the user's next request without re-login. | proposed |
 | R9 | RBAC lists (`/api/admin/rbac/roles|permissions|grants`) return every item `{ items }` without pagination: configuration, not data, and Notion asks for a plain list (an exception to H2). Responses wrap single items as `{ role }`, `{ permission }`, `{ grant }`; POST 201, PUT 200 (full replace), DELETE 204. A 403 from `PermissionGuard` logs `actorUserId`, permission, action; every admin change logs actor, operation, entity, result, and each cache reload is logged (Notion 1.5). A reload that fails after a committed change is logged and retried, not turned into a 500. | proposed |
 
+## User profiles
+
+| # | Decision | Status |
+| --- | --- | --- |
+| P1 | Profile = `{ id, email, photo, fields }` (Notion minimum). Profile fields so far: `displayName` (optional, ≤ 100 chars), `status`, `createdAt`, `lastLoginAt`. Visibility (default-deny, `profile.policy.ts`): own profile `createdAt`, `displayName`, `lastLoginAt`, `status`; another user's (with `users@read`) `createdAt`, `displayName`, `status`. `photo` is an API path or `null` (F4); always `null` until photo upload arrives with FC-6. Responses carrying a profile are `Cache-Control: no-store`. | proposed |
+| P2 | Without `users@read`, a foreign `userId` answers 403 whether the account exists or not (no enumeration; IDOR refused before the lookup). With it, a missing account is 404. Profile reads are rate-limited per IP in the `profile` group, 60/min (`THROTTLE_PROFILE_LIMIT`, Notion 1.4). Each view logs `viewerUserId`, `targetUserId`, result (1.5). A malformed `userId` answers 400 `VALIDATION_FAILED` like every other id parameter (H3); ids are canonicalised to lowercase before any comparison. | proposed |
+| P3 | `/api/users/{userId}…` lives in an `accounts` module that depends on `users` and `rbac`, so neither of those depends on the other. | proposed |
+
 ## Files and transformations
 
 | # | Decision | Status |

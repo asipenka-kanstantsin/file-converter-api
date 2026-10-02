@@ -56,6 +56,7 @@ export const envSchema = z
     THROTTLE_LOGIN_BLOCK_SECONDS: positiveInt.default(900),
     THROTTLE_LOGIN_LIMIT: positiveInt.default(5),
     THROTTLE_MAIL_LIMIT: positiveInt.default(3),
+    THROTTLE_PROFILE_LIMIT: positiveInt.default(60),
     THROTTLE_TTL_SECONDS: positiveInt.default(60),
   })
   .superRefine((env, ctx) => {

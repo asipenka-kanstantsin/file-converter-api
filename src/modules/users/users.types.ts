@@ -6,8 +6,10 @@ export type UserStatus = z.infer<typeof userStatusSchema>;
 
 export interface User {
   createdAt: Date;
+  displayName: null | string;
   email: string;
   id: string;
+  lastLoginAt: Date | null;
   status: UserStatus;
   tokenVersion: number;
 }

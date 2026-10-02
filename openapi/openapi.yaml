@@ -499,6 +499,50 @@ paths:
         default:
           $ref: '#/components/responses/Default'
 
+  /api/users/{userId}:
+    get:
+      operationId: users_getProfile
+      tags: [users]
+      summary: A user's profile
+      description: |
+        One's own profile needs no permission; another user's needs `users@read`. Without it a
+        foreign id answers 403 whether the account exists or not. Only the fields allowed for the
+        audience are returned (default-deny): own profile `createdAt`, `displayName`,
+        `lastLoginAt`, `status`; someone else's `createdAt`, `displayName`, `status`.
+      x-permission: users@read (not needed for one's own profile)
+      security:
+        - accessCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: The profile.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            X-RateLimit-Limit-profile:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining-profile:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset-profile:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UserNotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
   /api/admin/rbac/roles:
     get:
       operationId: rbac_listRoles
@@ -1604,6 +1648,44 @@ components:
           type: boolean
         confirmation.registration:
           type: boolean
+
+    Profile:
+      type: object
+      additionalProperties: false
+      required: [id, email, photo, fields]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        photo:
+          type: [string, 'null']
+          description: API path of the photo (`/api/users/{userId}/photo`), never a storage URL.
+        fields:
+          type: object
+          additionalProperties: false
+          description: Only the fields allowed for the viewer.
+          properties:
+            displayName:
+              type: [string, 'null']
+            status:
+              type: string
+              enum: [active, pending_verification]
+            createdAt:
+              type: string
+              format: date-time
+            lastLoginAt:
+              type: [string, 'null']
+              format: date-time
+    ProfileEnvelope:
+      type: object
+      additionalProperties: false
+      required: [profile]
+      properties:
+        profile:
+          $ref: '#/components/schemas/Profile'
 
     ErrorOrValidationEnvelope:
       anyOf:

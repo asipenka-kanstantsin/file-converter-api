@@ -16,4 +16,6 @@ export const passwordSchema = z
     message: 'password_too_weak',
   });
 
-export const uuidSchema = z.uuid();
+// Canonical lowercase: ids are compared as strings (Self checks, audit), and Postgres would
+// otherwise match an uppercase id that a string comparison does not.
+export const uuidSchema = z.uuid().transform((id) => id.toLowerCase());

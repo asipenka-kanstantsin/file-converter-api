@@ -6,8 +6,10 @@ import type { User } from './users.types';
 
 const user: User = {
   createdAt: new Date(),
+  displayName: null,
   email: 'jane@example.com',
   id: 'u1',
+  lastLoginAt: null,
   status: 'active',
   tokenVersion: 0,
 };

@@ -21,6 +21,7 @@ model User {
   id           String      @id @default(uuid(7)) @db.Uuid
   email        String      @unique(map: "users_email_key") @db.VarChar(254)
   passwordHash String      @map("password_hash")
+  displayName  String?     @map("display_name") @db.VarChar(100)
   status       UserStatus
   tokenVersion Int         @default(0) @map("token_version")
   lastLoginAt  DateTime?   @map("last_login_at") @db.Timestamptz(3)

@@ -5,8 +5,10 @@ import type { SessionTokenService, VerifiedToken } from './session-tokens';
 
 const user: SessionUser = {
   createdAt: new Date(),
+  displayName: null,
   email: 'jane@example.com',
   id: 'u1',
+  lastLoginAt: null,
   roleIds: ['r1'],
   status: 'active',
   tokenVersion: 2,

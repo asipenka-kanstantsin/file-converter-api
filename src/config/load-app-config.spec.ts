@@ -45,6 +45,7 @@ describe('parseAppConfig', () => {
       loginBlockSeconds: 900,
       loginLimit: 5,
       mailLimit: 3,
+      profileLimit: 60,
       ttlSeconds: 60,
     });
     expect(Object.isFrozen(config)).toBe(true);

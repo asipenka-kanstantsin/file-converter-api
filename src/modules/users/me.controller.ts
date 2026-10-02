@@ -1,4 +1,4 @@
-import { Controller, Get, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Header, HttpStatus } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 
 import { type AuthUser, CurrentUser } from '@/common/decorators';
@@ -14,6 +14,7 @@ export class MeController {
   constructor(private readonly users: UsersService) {}
 
   @Get()
+  @Header('Cache-Control', 'no-store')
   @ZodSerializerDto(UserEnvelopeDto)
   async me(@CurrentUser() actor: AuthUser): Promise<{ user: UserResponse }> {
     const user = await this.users.findById(actor.id);
