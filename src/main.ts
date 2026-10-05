@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 
@@ -14,4 +15,7 @@ async function bootstrap(): Promise<void> {
   await app.listen(app.get(AppConfig).app.port);
 }
 
-void bootstrap();
+bootstrap().catch((error: unknown) => {
+  new Logger('bootstrap').error(error);
+  process.exit(1);
+});

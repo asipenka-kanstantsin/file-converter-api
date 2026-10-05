@@ -67,7 +67,7 @@ export class OutboxDispatcher
   onApplicationBootstrap(): void {
     if (!this.config.jobs.enabled) return;
     this.timer = setInterval(() => {
-      void this.poll();
+      this.poll();
     }, this.config.jobs.outboxPollIntervalMs);
   }
 
@@ -182,16 +182,19 @@ export class OutboxDispatcher
     }
   }
 
-  private async poll(): Promise<void> {
+  private poll(): void {
     if (this.running) return;
     this.running = true;
-    try {
-      await this.tick();
-    } catch (error: unknown) {
-      this.logger.error({ error: sanitizeError(error) }, 'outbox poll failed');
-    } finally {
-      this.running = false;
-    }
+    this.tick()
+      .catch((error: unknown) => {
+        this.logger.error(
+          { error: sanitizeError(error) },
+          'outbox poll failed',
+        );
+      })
+      .finally(() => {
+        this.running = false;
+      });
   }
 
   private async updateOwned(

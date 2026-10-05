@@ -63,4 +63,7 @@ async function main(): Promise<void> {
   }
 }
 
-void main();
+main().catch((error: unknown) => {
+  new Logger('grant-admin').error(error);
+  process.exit(1);
+});

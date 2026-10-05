@@ -95,14 +95,17 @@ async function render(job: SvgRenderJob): Promise<Uint8Array> {
 }
 
 process.once('message', (job: SvgRenderJob) => {
-  void render(job)
-    .then((output): SvgRenderResult => ({ ok: true, output }))
-    .catch((error: unknown): SvgRenderResult =>
-      error instanceof Refused
-        ? { code: error.code, context: error.context, ok: false }
-        : { code: 'FILE_PARSE_ERROR', ok: false },
+  render(job)
+    .then(
+      (output): SvgRenderResult => ({ ok: true, output }),
+      (error: unknown): SvgRenderResult =>
+        error instanceof Refused
+          ? { code: error.code, context: error.context, ok: false }
+          : { code: 'FILE_PARSE_ERROR', ok: false },
     )
     .then((result) => {
       process.send?.(result, () => process.exit(0));
-    });
+    })
+    // The parent reports a child that exits without a result.
+    .catch(() => process.exit(1));
 });
