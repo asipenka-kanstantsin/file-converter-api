@@ -88,6 +88,36 @@ paths:
         default:
           $ref: '#/components/responses/Default'
 
+  /api/docs:
+    get:
+      operationId: openApi_docs
+      tags: [system]
+      summary: Interactive Swagger UI for this contract
+      description: >-
+        Browser page that renders `/api/openapi.json` with "Try it out". Requests carry the
+        session cookies, and the page copies the `csrf_token` cookie into `X-CSRF-Token`, so call
+        `GET /api/auth/csrf` first.
+      responses:
+        '200':
+          description: The HTML page.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            text/html:
+              schema:
+                type: string
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/Default'
+
   /api/openapi.json:
     get:
       operationId: openApi_json

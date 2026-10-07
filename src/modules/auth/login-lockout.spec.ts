@@ -104,4 +104,18 @@ describe('LoginLockout', () => {
 
     expect(() => lockout.begin(key, Date.now() + 120_001)).toThrow();
   });
+
+  it('never tracks more than the ceiling, evicting the oldest unblocked pair', () => {
+    const lockout = new LoginLockout(config);
+    const { entries } = lockout as unknown as { entries: Map<string, unknown> };
+    failTimes(lockout, 3);
+    for (let i = 0; i < 10_100; i++) lockout.begin(`k${String(i)}`).fail();
+
+    expect(entries.size).toBe(10_000);
+    expect(entries.has('k0')).toBe(false);
+    expect(entries.has('k10099')).toBe(true);
+    expect(() => lockout.begin(key)).toThrow(
+      expect.objectContaining({ code: ErrorCode.RATE_LIMITED }) as Error,
+    );
+  });
 });

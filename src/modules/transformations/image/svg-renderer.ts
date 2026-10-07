@@ -81,6 +81,9 @@ export class SvgRenderer implements BeforeApplicationShutdown {
         finish(() => {
           if (result.ok) {
             resolve(Buffer.from(result.output));
+          } else if ('error' in result) {
+            // Not the client's fault: the global filter logs it and answers 500.
+            reject(new Error(`svg render failed: ${result.error}`));
           } else {
             reject(
               new AppException(

@@ -7,6 +7,7 @@ import { AppConfig } from '@/config';
 import { SettingsService } from '@/modules/settings';
 
 import { Converter } from '../converter';
+import { LIBVIPS_BAD_INPUT } from './libvips-errors';
 import { looksLikeSvg } from './svg-detect';
 import { SvgRenderer } from './svg-renderer';
 
@@ -46,11 +47,6 @@ export type ImageOptions = z.infer<typeof imageOptionsSchema>;
 function invalid(code: ErrorCode, context?: Record<string, unknown>): never {
   throw new AppException(code, HttpStatus.BAD_REQUEST, context);
 }
-
-// Messages of libvips for input it cannot read — the client's fault. Anything else (memory,
-// a killed operation) is ours: a 500, logged.
-const BAD_INPUT =
-  /corrupt|premature|unsupported image|bad (?:image|dimensions|header|huffman)|not a known|invalid|truncated|read error|marker/i;
 
 // Notion "Трансформация изображений": PNG ↔ JPEG and SVG → PNG/JPEG; never raster → SVG.
 @Injectable()
@@ -172,7 +168,7 @@ export class ImageConverter extends Converter<ImageFormat> {
         },
       );
     }
-    if (BAD_INPUT.test(message)) {
+    if (LIBVIPS_BAD_INPUT.test(message)) {
       return new AppException(
         ErrorCode.FILE_PARSE_ERROR,
         HttpStatus.BAD_REQUEST,

@@ -1,5 +1,6 @@
 import sharp from 'sharp';
 
+import { LIBVIPS_BAD_INPUT } from './libvips-errors';
 import { sanitizeSvg, UnsafeSvgError } from './svg-sanitizer';
 
 // The whole SVG → raster conversion runs in a child process per job (decision F11): parsing and
@@ -21,8 +22,10 @@ export interface SvgRenderJob {
 
 export type SvgFailure = 'FILE_PARSE_ERROR' | 'IMAGE_TOO_LARGE' | 'SVG_UNSAFE';
 
+// `error`: an unexpected failure (memory, a libvips limit, a bug) — the parent answers 500.
 export type SvgRenderResult =
   | { code: SvgFailure; context?: Record<string, number>; ok: false }
+  | { error: string; ok: false }
   | { ok: true; output: Uint8Array };
 
 // Notion 1.3.1: without an intrinsic size, a default.
@@ -89,9 +92,16 @@ async function render(job: SvgRenderJob): Promise<Uint8Array> {
   const pipeline = sharp(svg, { density, limitInputPixels: false })
     .resize({ fit: 'fill', height, width })
     .flatten({ background: job.background });
-  return job.target === 'jpeg'
-    ? pipeline.jpeg({ mozjpeg: true, quality: job.quality }).toBuffer()
-    : pipeline.png().toBuffer();
+  try {
+    return await (job.target === 'jpeg'
+      ? pipeline.jpeg({ mozjpeg: true, quality: job.quality }).toBuffer()
+      : pipeline.png().toBuffer());
+  } catch (error: unknown) {
+    if (error instanceof Error && LIBVIPS_BAD_INPUT.test(error.message)) {
+      throw new Refused('FILE_PARSE_ERROR');
+    }
+    throw error;
+  }
 }
 
 process.once('message', (job: SvgRenderJob) => {
@@ -101,7 +111,10 @@ process.once('message', (job: SvgRenderJob) => {
       (error: unknown): SvgRenderResult =>
         error instanceof Refused
           ? { code: error.code, context: error.context, ok: false }
-          : { code: 'FILE_PARSE_ERROR', ok: false },
+          : {
+              error: error instanceof Error ? error.message : String(error),
+              ok: false,
+            },
     )
     .then((result) => {
       process.send?.(result, () => process.exit(0));

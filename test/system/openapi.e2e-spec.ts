@@ -35,6 +35,17 @@ describe('OpenAPI document', () => {
     expect(res.body).toEqual(spec);
   });
 
+  it('GET /docs serves Swagger UI bound to the JSON document', async () => {
+    const res = await request(app.getHttpServer()).get('/api/docs').expect(200);
+
+    expectContract('get', '/api/docs', res);
+    expect(res.headers['content-type']).toMatch(/^text\/html/);
+    expect(res.headers['content-security-policy']).toMatch(
+      /script-src https:\/\/cdn\.jsdelivr\.net\/npm\/swagger-ui-dist@5\/ 'sha256-/,
+    );
+    expect(res.text).toContain("url: '/api/openapi.json'");
+  });
+
   it('sends hardening headers and no x-powered-by', async () => {
     const res = await request(app.getHttpServer()).get('/health/live');
 

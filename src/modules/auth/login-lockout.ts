@@ -50,9 +50,11 @@ export class LoginLockout {
         oldest === undefined ? 1000 : oldest + ttlSeconds * 1000 - now,
       );
     }
+    if (!this.entries.has(key) && this.entries.size >= MAX_TRACKED_KEYS) {
+      this.makeRoom(now);
+    }
     entry.inFlight += 1;
     this.entries.set(key, entry);
-    if (this.entries.size > MAX_TRACKED_KEYS) this.prune(now);
 
     let settled = false;
     const settle = (outcome: (current: Entry) => void): void => {
@@ -86,6 +88,23 @@ export class LoginLockout {
         });
       },
     };
+  }
+
+  // A hard ceiling on memory. When every tracked pair is still active, the oldest unblocked one is
+  // forgotten rather than refusing everyone's sign-in: evicting a pair takes 10 000 fresh pairs,
+  // which give an attacker no more than the per-IP limit already does (A15).
+  private makeRoom(now: number): void {
+    this.prune(now);
+    if (this.entries.size < MAX_TRACKED_KEYS) return;
+    let victim: string | undefined;
+    for (const [key, entry] of this.entries) {
+      victim ??= key;
+      if (entry.blockedUntil <= now) {
+        victim = key;
+        break;
+      }
+    }
+    if (victim !== undefined) this.entries.delete(victim);
   }
 
   private prune(now: number): void {
