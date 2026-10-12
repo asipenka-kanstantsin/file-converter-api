@@ -11,6 +11,9 @@ jobs:
     env:
       # postinstall runs `prisma generate`; e2e tests read .env.test
       DATABASE_URL: postgresql://app:app@localhost:5432/app_test
+    # Optional: the e2e runs start a PostgreSQL 18 cluster of their own when nothing answers on
+    # DATABASE_URL (decision T1). The service container is kept because it is faster than initdb
+    # on every run, and it keeps the "an existing server is used" branch covered.
     services:
       postgres:
         image: postgres:18-alpine

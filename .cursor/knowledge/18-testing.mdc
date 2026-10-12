@@ -1,5 +1,5 @@
 ---
-description: Testing rules — Jest unit tests, supertest e2e against real Postgres, mocks policy, contract snapshot, 80 % coverage floor + ratchet, PR gate
+description: Testing rules — Jest unit tests, docker-free supertest e2e against real Postgres, mocks policy, contract snapshot, 80 % coverage floor + ratchet, PR gate
 alwaysApply: false
 ---
 
@@ -11,20 +11,23 @@ alwaysApply: false
 npm run test          # Jest unit, single run
 npm run test:watch
 npm run test:cov      # unit + enforced coverage threshold
-npm run test:e2e      # e2e against real Postgres, Mailpit, local storage
-npm run verify        # format:check → lint → typecheck → test:cov → build → test:e2e
+npm run test:e2e      # e2e against real Postgres (started by the run), SMTP sink, local storage
+npm run test:e2e:s3   # the S3 adapter suite — the one that needs `docker compose up -d`
+npm run verify        # format:check → lint → typecheck → openapi:lint → test:cov → build
 ```
 
-`verify` is the pull-request gate, run serially. CI runs the same scripts (e2e with Postgres and
-Mailpit as service containers); a green `verify` locally should mean a green pipeline.
+`verify` is the pull-request gate, run serially, and **needs no docker**. CI runs the same scripts
+(with a Postgres service container, which the run then uses instead of starting its own); a green
+`verify` locally should mean a green pipeline.
 
 ## Layout and config
 
 | Kind | Location | Config |
 | --- | --- | --- |
 | Unit | `src/**/*.spec.ts`, next to the code | `jest.config.ts` project `unit` |
-| e2e | `test/**/*.e2e-spec.ts` | `jest.config.ts` project `e2e`, `--runInBand`, `globalSetup` runs `prisma migrate deploy` on `app_test` |
-| Helpers | `test/helpers/` | app factory, db reset, factories, auth, mail reader |
+| e2e | `test/**/*.e2e-spec.ts` | `jest.config.ts` project `e2e`, `--runInBand`, `globalSetup` brings the infrastructure up and runs `prisma migrate deploy` |
+| e2e (S3) | `test/storage/*.e2e-spec.ts` | project `e2e-s3`, excluded from `e2e` and from `test:cov` |
+| Helpers | `test/helpers/` | app factory, db reset, factories, auth, mail reader, infrastructure |
 
 `ts-jest`, `moduleNameMapper` for `@/`.
 Jest runs under `node --experimental-vm-modules` (the npm scripts do it): the Prisma 7 client loads
@@ -50,14 +53,26 @@ A real Nest app, the real pipes/filters/guards, the real ORM against real Postgr
 
 ```ts
 const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-  .overrideProvider(MAIL_TRANSPORT).useValue(fakeTransport) // only if not using Mailpit
+  .overrideProvider(MAIL_TRANSPORT).useValue(fakeTransport) // only if not using the mail sink
   .compile();
 app = moduleRef.createNestApplication();
 configureApp(app);            // same function main.ts uses: prefix, cookies, CORS, filters
 await app.init();
 ```
 
-- Postgres from docker compose, or Testcontainers when the suite must be self-contained.
+- **Infrastructure is the run's own** (decision T1), brought up in `globalSetup` and addressed
+  through environment variables, which beat `.env.test` (`loadAppConfig` never overrides what is
+  already set):
+  - **Postgres** — `test/helpers/postgres.ts` probes the configured `DATABASE_URL` and uses that
+    server if it answers (compose locally, the service container in CI); otherwise it starts a
+    PostgreSQL 18 cluster from `embedded-postgres` on a free port, into a temp data directory
+    dropped again in `globalTeardown`. The cluster is pinned to `timezone=UTC`: `initdb` takes the
+    host's zone, timestamps reach the server without an offset, and any other zone silently shifts
+    every stored `timestamptz`. `fsync=off` — nothing here has to survive a crash.
+  - **SMTP** — `test/helpers/mail-sink.ts` runs a real SMTP server in the test process, so the
+    app's nodemailer transport is exercised as in production; suites read the mailbox through
+    `test/helpers/mail.ts` over the sink's small HTTP API. No Mailpit, no container.
+  - Never add a suite to the `e2e` project that needs something neither of these provides.
 - **DB reset**: `TRUNCATE … RESTART IDENTITY CASCADE` of every table except migrations
   `beforeEach` (single worker), or one schema/database per Jest worker
   (`JEST_WORKER_ID`) migrated in `globalSetup` for parallel runs. Pick one per project.
@@ -70,14 +85,14 @@ const agent = await loginAs(app, user);        // supertest.agent, cookie jar ke
 await agent.post("/items").set("X-CSRF-Token", agent.csrf).send(body).expect(201);
 ```
 
-- Outbox: run `dispatcher.tick()` explicitly, then assert Mailpit / storage (`20-jobs.mdc`).
+- Outbox: run `dispatcher.tick()` explicitly, then assert the mail sink / storage (`20-jobs.mdc`).
 
 ## What may be mocked
 
 | Boundary | Replacement |
 | --- | --- |
-| SMTP | Mailpit (preferred in e2e) or `FakeMailTransport` |
-| Object storage | `STORAGE_DRIVER=local` temp dir; compose S3 (SeaweedFS) for the S3 adapter suite |
+| SMTP | the in-process SMTP sink (preferred in e2e) or `FakeMailTransport` |
+| Object storage | `STORAGE_DRIVER=local` temp dir; compose S3 (SeaweedFS) for the S3 adapter suite, which lives in the opt-in `e2e-s3` project |
 | Third-party HTTP | `nock` or `msw` — unmatched request fails the test |
 | Clock | injected `Clock` / Jest fake timers |
 
@@ -92,7 +107,7 @@ filter in e2e. A test that passes with those mocked proves nothing about the con
 4. 400 `VALIDATION_FAILED` for a representative invalid body, `context.fields` asserted.
 5. Each documented `ErrorCode` the endpoint can return.
 6. Unsafe method without `X-CSRF-Token` → 403 `CSRF_INVALID` (once per controller is enough).
-7. Side effects: mail in Mailpit with the right locale, file row + object, audit row.
+7. Side effects: mail in the sink with the right locale, file row + object, audit row.
 
 Asserting the error envelope means asserting `code`, never `detail` text (except in the i18n test).
 
@@ -113,7 +128,7 @@ An intended contract change edits the spec in the same PR and is listed under "C
 ## Coverage floor and ratchet
 
 The Notion NFR page requires **≥ 80 %** coverage from unit + integration tests. `npm run test:cov`
-merges unit and e2e coverage and `coverageThreshold.global` starts at 80 for statements, branches,
+merges `unit` and `e2e` coverage (not `e2e-s3`, which is not part of the gate) and `coverageThreshold.global` starts at 80 for statements, branches,
 functions and lines; it only moves up. Never lower a number to get a change through — add the test or fix the change. Excluded:
 `main.ts`, `*.module.ts`, `index.ts` barrels, migrations, generated files, `test/`.
 
@@ -122,5 +137,7 @@ functions and lines; it only moves up. Never lower a number to get a change thro
 - Every behaviour change ships with a test; a bugfix ships with the test that reproduces it.
 - A 500 anywhere in an e2e run is a failure, even inside an "expects error" test.
 - Tests are independent and order-free; unique emails per test.
-- No `sleep`; poll with a deadline (Mailpit) or tick the worker.
+- No `sleep`; poll with a deadline (the mail sink) or tick the worker.
+- Assert the invariant, not an interleaving: a concurrency test must pass whichever request commits
+  first, because that order changes with the database the run picked.
 - No `.only`, no skipped tests on `main`.

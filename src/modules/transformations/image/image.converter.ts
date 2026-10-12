@@ -1,13 +1,11 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
-import sharp from 'sharp';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
 import { AppException, ErrorCode } from '@/common/errors';
-import { AppConfig } from '@/config';
 import { SettingsService } from '@/modules/settings';
 
+import { ConversionPool } from '../conversion.pool';
 import { Converter } from '../converter';
-import { LIBVIPS_BAD_INPUT } from './libvips-errors';
 import { looksLikeSvg } from './svg-detect';
 import { SvgRenderer } from './svg-renderer';
 
@@ -21,11 +19,6 @@ const MIME: Readonly<Record<ImageFormat, string>> = {
   svg: 'image/svg+xml',
 };
 
-// Decompression bombs (Notion 1.4, 1.6): a raster may not decode to more than this, whatever its
-// file size says.
-const MAX_INPUT_PIXELS = 50_000_000;
-// Raster conversions at once on the libuv pool, which sign-ins (argon2) and storage share.
-const MAX_RASTER_JOBS = 2;
 const DEFAULT_BACKGROUND = '#ffffff';
 const DEFAULT_QUALITY = 85;
 
@@ -59,11 +52,8 @@ export class ImageConverter extends Converter<ImageFormat> {
     svg: ['jpeg', 'png'],
   } as const satisfies Record<ImageFormat, readonly ImageFormat[]>;
 
-  private readonly logger = new Logger(ImageConverter.name);
-  private rasterJobs = 0;
-
   constructor(
-    private readonly config: AppConfig,
+    private readonly pool: ConversionPool,
     private readonly renderer: SvgRenderer,
     private readonly settings: SettingsService,
   ) {
@@ -107,77 +97,30 @@ export class ImageConverter extends Converter<ImageFormat> {
       : this.convertRaster(input, target, options);
   }
 
+  // PNG ↔ JPEG in a worker thread (F2): sharp's encode leaves the libuv pool that sign-ins
+  // (argon2) and storage share, and the pool aborts it at the timeout.
   private async convertRaster(
     input: Buffer,
     target: 'jpeg' | 'png',
     options: ImageOptions,
   ): Promise<Buffer> {
-    if (this.rasterJobs >= MAX_RASTER_JOBS) {
+    const result = await this.pool.run({
+      background: options.background ?? DEFAULT_BACKGROUND,
+      input,
+      kind: 'raster',
+      quality: options.quality ?? DEFAULT_QUALITY,
+      target,
+      timeoutMs: this.pool.timeoutMs,
+    });
+    if (!(result instanceof Uint8Array)) {
       throw new AppException(
-        ErrorCode.SERVICE_UNAVAILABLE,
-        HttpStatus.SERVICE_UNAVAILABLE,
-      );
-    }
-    this.rasterJobs += 1;
-    try {
-      // EXIF orientation applied, then dropped (a phone photo stays upright).
-      const pipeline = sharp(input, {
-        failOn: 'error',
-        limitInputPixels: MAX_INPUT_PIXELS,
-      }).rotate();
-      // A valid header with a broken body fails here, not half-way through the encode.
-      await pipeline.metadata();
-      const encoded =
-        target === 'jpeg'
-          ? pipeline
-              .flatten({ background: options.background ?? DEFAULT_BACKGROUND })
-              .jpeg({
-                mozjpeg: true,
-                quality: options.quality ?? DEFAULT_QUALITY,
-              })
-          : pipeline.png();
-      return await encoded
-        .timeout({
-          seconds: Math.max(
-            1,
-            Math.ceil(this.config.conversion.timeoutMs / 1000),
-          ),
-        })
-        .toBuffer();
-    } catch (error: unknown) {
-      throw this.rasterError(error);
-    } finally {
-      this.rasterJobs -= 1;
-    }
-  }
-
-  private rasterError(error: unknown): Error {
-    const message = error instanceof Error ? error.message : '';
-    if (/timeout/i.test(message)) {
-      return new AppException(
-        ErrorCode.CONVERSION_TIMEOUT,
+        ErrorCode[result.code],
         HttpStatus.BAD_REQUEST,
+        result.context,
       );
     }
-    if (/pixel limit/i.test(message)) {
-      return new AppException(
-        ErrorCode.IMAGE_TOO_LARGE,
-        HttpStatus.BAD_REQUEST,
-        {
-          maxPixels: MAX_INPUT_PIXELS,
-        },
-      );
-    }
-    if (LIBVIPS_BAD_INPUT.test(message)) {
-      return new AppException(
-        ErrorCode.FILE_PARSE_ERROR,
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-    this.logger.error({ err: error }, 'image conversion failed');
-    return error instanceof Error
-      ? error
-      : new Error('image conversion failed');
+    // A view on the moved bytes: no copy.
+    return Buffer.from(result.buffer, result.byteOffset, result.byteLength);
   }
 
   // SVG → raster (F11): checked, sized and rendered in the child process; here only the limits

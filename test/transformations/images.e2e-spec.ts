@@ -1,8 +1,11 @@
+import { HttpStatus } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import sharp from 'sharp';
 import type request from 'supertest';
 
+import { AppException, ErrorCode } from '@/common/errors';
 import { TransformationsService } from '@/modules/transformations';
+import { ConversionPool } from '@/modules/transformations/conversion.pool';
 
 import { createTestApp } from '../helpers/app';
 import { type SignedInUser, signedInUser } from '../helpers/auth';
@@ -449,4 +452,65 @@ describe('POST /api/images/convert with a tiny timeout', () => {
     expectContract('post', URL, res);
     expect([res.status, code(res)]).toEqual([400, 'CONVERSION_TIMEOUT']);
   });
+});
+
+// The pool refuses a job once every thread and its share of the queue are taken; both conversion
+// endpoints answer 503 then, and both document it. Saturating the real pool would be slow and
+// timing-dependent, so the refusal is injected (as the storage suite injects an outage).
+describe('conversion endpoints with the worker pool saturated', () => {
+  let app: NestExpressApplication;
+  const busy = {
+    onModuleDestroy: (): Promise<void> => Promise.resolve(),
+    run: (): Promise<never> =>
+      Promise.reject(
+        new AppException(
+          ErrorCode.SERVICE_UNAVAILABLE,
+          HttpStatus.SERVICE_UNAVAILABLE,
+        ),
+      ),
+    timeoutMs: 30_000,
+  };
+
+  beforeAll(async () => {
+    app = await createTestApp((builder) =>
+      builder.overrideProvider(ConversionPool).useValue(busy),
+    );
+    await resetDatabase(app);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it.each([
+    ['/api/images/convert', 'png', 'x.png'],
+    ['/api/convert', 'json', 'x.csv'],
+  ])(
+    'answers 503 SERVICE_UNAVAILABLE on %s',
+    async (url, targetFormat, filename) => {
+      const me = await signedInUser(app);
+      const file =
+        filename === 'x.png'
+          ? await sharp({
+              create: {
+                background: '#00ff00',
+                channels: 3,
+                height: 8,
+                width: 8,
+              },
+            })
+              .jpeg()
+              .toBuffer()
+          : Buffer.from('a,b\n1,2\n');
+
+      const res = await me.client.agent
+        .post(url)
+        .set('X-CSRF-Token', me.client.csrf)
+        .field('targetFormat', targetFormat)
+        .attach('file', file, filename);
+
+      expectContract('post', url, res);
+      expect([res.status, code(res)]).toEqual([503, 'SERVICE_UNAVAILABLE']);
+    },
+  );
 });

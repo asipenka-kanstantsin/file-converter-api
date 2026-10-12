@@ -4,9 +4,9 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 
 import { AppException, ErrorCode } from '@/common/errors';
 
+import { ConversionPool } from '../conversion.pool';
 import { Converter } from '../converter';
 import { sniffFormat, type TextFormat } from './text-conversion';
-import { TextConversionPool } from './text-conversion.pool';
 
 const FORMATS = ['csv', 'json', 'xml', 'yaml'] as const;
 
@@ -40,7 +40,7 @@ export class TextConverter extends Converter<TextFormat> {
     yaml: others('yaml'),
   };
 
-  constructor(private readonly pool: TextConversionPool) {
+  constructor(private readonly pool: ConversionPool) {
     super();
   }
 
@@ -49,7 +49,7 @@ export class TextConverter extends Converter<TextFormat> {
     source: TextFormat,
     target: TextFormat,
   ): Promise<Buffer> {
-    const result = await this.pool.run(input, source, target);
+    const result = await this.pool.run({ input, kind: 'text', source, target });
     if (!(result instanceof Uint8Array)) {
       throw new AppException(ErrorCode[result.code], HttpStatus.BAD_REQUEST, {
         format: source,

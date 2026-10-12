@@ -16,9 +16,9 @@ import {
 import {
   clearMailbox,
   confirmationSecrets,
-  type MailpitMessage,
+  type SentMail,
   waitForMessageTo,
-} from '../helpers/mailpit';
+} from '../helpers/mail';
 
 const PASSWORD = 'correct-horse-42';
 const JWT_CLAIMS = { audience: 'file-converter', issuer: 'file-converter-api' };
@@ -41,7 +41,7 @@ function tokenOf(res: request.Response, name: string): string {
   return (cookie(res, name) ?? '').slice(name.length + 1).split(';')[0] ?? '';
 }
 
-async function newestMail(email: string, count = 1): Promise<MailpitMessage> {
+async function newestMail(email: string, count = 1): Promise<SentMail> {
   const [newest] = await waitForMessageTo(email, count);
   if (!newest) throw new Error(`no mail to ${email}`);
   return newest;
@@ -229,7 +229,7 @@ describe('login', () => {
       expect(ttl).toBeGreaterThan(590_000);
       expect(ttl).toBeLessThanOrEqual(600_000);
       await deliverOutbox(app);
-      expect((await newestMail(email)).Subject).toBe('Confirm your sign-in');
+      expect((await newestMail(email)).subject).toBe('Confirm your sign-in');
     });
 
     it('sets the session cookies when the code is confirmed', async () => {
@@ -327,7 +327,7 @@ describe('login', () => {
         new RegExp(`^login_challenge=${challengeId}; Max-Age=600;`),
       );
       const mails = await waitForMessageTo(email, 2);
-      expect(mails.map((mail) => mail.Subject)).toEqual([
+      expect(mails.map((mail) => mail.subject)).toEqual([
         'Confirm your sign-in',
         'Confirm your sign-in',
       ]);

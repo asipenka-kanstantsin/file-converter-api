@@ -31,7 +31,17 @@ const config: Config = {
       ...shared,
       displayName: 'e2e',
       globalSetup: '<rootDir>/test/helpers/global-setup.ts',
+      globalTeardown: '<rootDir>/test/helpers/global-teardown.ts',
+      // The storage suite needs the compose S3 (SeaweedFS); it has its own project and script.
       testMatch: ['<rootDir>/test/**/*.e2e-spec.ts'],
+      testPathIgnorePatterns: ['<rootDir>/test/storage/'],
+    },
+    {
+      ...shared,
+      displayName: 'e2e-s3',
+      globalSetup: '<rootDir>/test/helpers/global-setup.ts',
+      globalTeardown: '<rootDir>/test/helpers/global-teardown.ts',
+      testMatch: ['<rootDir>/test/storage/*.e2e-spec.ts'],
     },
   ],
 };
