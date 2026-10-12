@@ -17,6 +17,9 @@
 /docs/requirements/
 docs/creds.md
 
+# personal study notes, not part of the project
+/learning/
+
 # local data
 /var/
 
