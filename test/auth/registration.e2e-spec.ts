@@ -11,7 +11,7 @@ import {
   confirmationSecrets,
   messagesTo,
   waitForMessageTo,
-} from '../helpers/mailpit';
+} from '../helpers/mail';
 
 const PASSWORD = 'correct-horse-42';
 
@@ -192,8 +192,8 @@ describe('registration', () => {
       await deliverOutbox(app);
       const messages = await waitForMessageTo(email);
       expect(messages).toHaveLength(1);
-      expect(messages[0]?.Subject).toBe('Confirm your registration');
-      expect(messages[0]?.Text).toMatch(/expire in 10 minutes/);
+      expect(messages[0]?.subject).toBe('Confirm your registration');
+      expect(messages[0]?.text).toMatch(/expire in 10 minutes/);
       const outbox = await prismaOf(app).outboxMessage.findFirstOrThrow();
       expect(outbox).toMatchObject({ payload: {}, status: 'done' });
       expect(challengeId).toMatch(/^[0-9a-f-]{36}$/);

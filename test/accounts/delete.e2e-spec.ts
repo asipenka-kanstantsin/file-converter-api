@@ -19,7 +19,7 @@ import {
   clearMailbox,
   confirmationSecrets,
   waitForMessageTo,
-} from '../helpers/mailpit';
+} from '../helpers/mail';
 
 const UNKNOWN_ID = '00000000-0000-4000-8000-000000000000';
 
@@ -65,7 +65,7 @@ describe('account deletion', () => {
     await deliverOutbox(app);
     const [mail] = await waitForMessageTo(who.email);
     if (!mail) throw new Error('no mail');
-    expect(mail.Subject).toBe('Confirm deleting your account');
+    expect(mail.subject).toBe('Confirm deleting your account');
     return {
       challengeId: (res.body as { challengeId: string }).challengeId,
       ...confirmationSecrets(mail),

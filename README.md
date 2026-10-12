@@ -8,12 +8,12 @@ NestJS 11 · TypeScript strict · PostgreSQL 18 · Prisma 7 · zod 4 · contract
 
 ## Run locally
 
-Requirements: Node.js 24 (`.nvmrc`), Docker.
+Requirements: Node.js 24 (`.nvmrc`). Docker for the dev stack — the tests do not need it.
 
 ```bash
 npm ci                    # also generates the Prisma client
 cp .env.example .env
-docker compose up -d      # Postgres 18, Mailpit (UI :8025), SeaweedFS S3 (:8333)
+docker compose up -d      # dev stack: Postgres 18, Mailpit (UI :8025), SeaweedFS S3 (:8333)
 npm run db:migrate
 npm run start:dev         # http://localhost:3001
 ```
@@ -30,8 +30,17 @@ The credentials in `docker-compose.yml`, `docker/`, `.env.example` and `.env.tes
 npm run verify   # format, lint, typecheck, OpenAPI lint, unit + e2e tests with ≥ 80 % coverage, build
 ```
 
-e2e tests need the compose Postgres (`app_test` database). Every e2e response is validated against
-`openapi/openapi.yaml`, and a route-inventory test keeps routes and the spec in sync.
+`verify` needs no docker. The e2e suites use the `.env.test` Postgres when one answers there and
+otherwise start a PostgreSQL 18 cluster of their own (`embedded-postgres`, dropped afterwards), and
+mail goes to an SMTP server inside the test process instead of Mailpit. Every e2e response is
+validated against `openapi/openapi.yaml`, and a route-inventory test keeps routes and the spec in
+sync.
+
+The one suite that does need the dev stack is the S3 adapter's:
+
+```bash
+docker compose up -d && npm run test:e2e:s3
+```
 
 ## Where things are
 

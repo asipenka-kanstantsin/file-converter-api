@@ -175,7 +175,16 @@ describe('PATCH /api/users/{userId}', () => {
         patch(second, first.id, { status: 'blocked' }),
       ]);
 
-      expect(results.map((res) => res.status).sort()).toEqual([200, 409]);
+      // Exactly one block goes through; the loser is refused either by the last-admin check
+      // (409) or, once the winner's bump has landed, already by the guard (401). Which of the
+      // two it gets depends on how the commits interleave — the invariant is what is asserted.
+      const statuses = results.map((res) => res.status).sort();
+      expect(statuses[0]).toBe(200);
+      expect([401, 409]).toContain(statuses[1]);
+      const active = await prismaOf(app).user.count({
+        where: { id: { in: [first.id, second.id] }, status: 'active' },
+      });
+      expect(active).toBe(1);
     });
 
     it('serialises concurrent edits of one account without errors', async () => {

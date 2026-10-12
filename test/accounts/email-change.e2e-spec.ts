@@ -16,7 +16,7 @@ import {
   confirmationSecrets,
   messagesTo,
   waitForMessageTo,
-} from '../helpers/mailpit';
+} from '../helpers/mail';
 
 interface Pending {
   challengeId: string;
@@ -65,7 +65,7 @@ describe('e-mail change', () => {
     await deliverOutbox(app);
     const [mail] = await waitForMessageTo(newEmail);
     if (!mail) throw new Error('no mail');
-    expect(mail.Subject).toBe('Confirm your new e-mail address');
+    expect(mail.subject).toBe('Confirm your new e-mail address');
     return {
       challengeId: (res.body as { challengeId: string }).challengeId,
       newEmail,
@@ -158,8 +158,8 @@ describe('e-mail change', () => {
     await deliverOutbox(app);
 
     const [notice] = await waitForMessageTo(me.email);
-    expect(notice?.Subject).toBe('Your e-mail address was changed');
-    expect(notice?.Text).not.toMatch(/\d{6}|token=/);
+    expect(notice?.subject).toBe('Your e-mail address was changed');
+    expect(notice?.text).not.toMatch(/\d{6}|token=/);
   });
 
   it('is Self only: an admin uses PATCH, another user is refused', async () => {
@@ -306,7 +306,7 @@ describe('e-mail change', () => {
       'AUTH_CHALLENGE_INVALID',
     ]);
     const [notice] = await waitForMessageTo(me.email);
-    expect(notice?.Subject).toBe('Your e-mail address was changed');
+    expect(notice?.subject).toBe('Your e-mail address was changed');
   });
 
   it('requires exactly one of code or token', async () => {

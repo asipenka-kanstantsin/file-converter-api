@@ -17,16 +17,17 @@ npm run typecheck     # tsc --noEmit (strict, noUncheckedIndexedAccess)
 npm run test          # Jest unit tests, single run
 npm run test:watch    # Jest, watch mode
 npm run test:cov      # Jest with the enforced coverage threshold
-npm run test:e2e      # e2e suite against a real Postgres (docker compose)
+npm run test:e2e      # e2e suite; starts its own Postgres and SMTP sink, no docker needed
+npm run test:e2e:s3   # S3 adapter suite only — needs `docker compose up -d`
 npm run db:migrate    # apply pending migrations
 npm run db:generate   # generate a migration from the schema diff
 npm run db:seed       # seed dev data
 npm run openapi:lint  # Redocly lint of openapi/openapi.yaml
 npm run verify        # the whole PR gate, locally
-docker compose up -d  # Postgres 18, Mailpit (SMTP sink, UI :8025), SeaweedFS (S3 API :8333)
+docker compose up -d  # dev only: Postgres 18, Mailpit (UI :8025), SeaweedFS (S3 API :8333)
 ```
 
-Unit tests are colocated as `src/**/*.spec.ts`; e2e tests live in `test/**/*.e2e-spec.ts` and run against a real database. `npm run verify` runs the full pull-request gate. Rules: `.cursor/knowledge/18-testing.mdc`.
+Unit tests are colocated as `src/**/*.spec.ts`; e2e tests live in `test/**/*.e2e-spec.ts` and run against a real database — the one `.env.test` points at when it answers, otherwise an embedded PostgreSQL 18 the run starts itself, so no suite in `verify` needs docker. `npm run verify` runs the full pull-request gate. Rules: `.cursor/knowledge/18-testing.mdc`.
 
 ## Requirements
 
