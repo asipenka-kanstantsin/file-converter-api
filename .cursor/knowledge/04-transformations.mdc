@@ -18,8 +18,11 @@ modules/transformations/
   transformations.service.ts     the pipeline: detect → limit → pair → convert → history → save
   transformations.controller.ts  POST /api/convert, GET /api/convert/formats
   images.controller.ts           POST /api/images/convert, GET /api/images/convert/formats
-  text/                          TextConverter on a piscina pool (text-conversion.worker.ts)
-  image/                         ImageConverter (sharp); SVG sanitised + rendered in a child process
+  conversion.pool.ts             the piscina pool both converters run on
+  conversion.worker.ts           worker entry: dispatches a text or a raster job
+  text/                          TextConverter + the pure text conversion (text-conversion.ts)
+  image/                         ImageConverter: raster encode in the pool (raster-conversion.ts);
+                                 SVG sanitised + rendered in a child process
   history.ts                     history query schema, keyset cursor (F12)
   history.controller.ts          GET …/transformations/history[/:itemId/download], Self + admin
   history.service.ts             history pages + audit
@@ -60,14 +63,23 @@ export abstract class FileTransformer {
 
 ## Execution
 
-- Text conversion runs in a **worker thread pool** (`piscina`, up to 4 threads, 1 GB heap each,
-  at most threads × 5 jobs in flight → 503 beyond) so parsing never blocks the event loop. Each
-  task has an `AbortSignal` with `CONVERSION_TIMEOUT_MS` (30 s, queue wait included). A timeout
-  is 400 `CONVERSION_TIMEOUT` and is recorded in history as `error`.
-- Rasters (PNG/JPEG) run through `sharp` in-process (libuv pool) with `limitInputPixels` 50 MP,
-  `.rotate()` and sharp's timeout; at most 2 at once. **SVG is rasterised in a child process**
-  (`svg-render.child`) killed at the timeout, at most 2 at once: librsvg renders in one call that
-  no in-process timeout can interrupt (decision F11).
+- **Nothing converts on the main thread** (decision F2). Text parsing and raster encoding share
+  one **worker thread pool** (`ConversionPool`, `piscina`, up to 4 threads — `CONVERSION_WORKERS` —
+  1 GB heap each, at most threads × 5 jobs in flight → 503 beyond). Each task carries an
+  `AbortSignal` with `CONVERSION_TIMEOUT_MS` (30 s, queue wait included); an abort terminates the
+  thread, so a runaway parse or encode cannot linger. A timeout is 400 `CONVERSION_TIMEOUT` and is
+  recorded in history as `error`.
+- A job is `{ kind: 'text' | 'raster', … }`; `conversion.worker.ts` dispatches it. The worker runs
+  without the app's path aliases, so everything it imports (`text-conversion.ts`,
+  `raster-conversion.ts`, `libvips-errors.ts`) uses relative imports and libraries only, and
+  returns failures as data (`{ code, context, ok: false }`) — an Error class does not survive the
+  thread boundary. From source the pool loads `conversion.worker.dev.js` (a ts-node shim), built it
+  loads `conversion.worker.js`.
+- Rasters (PNG/JPEG) use `sharp` inside the worker with `limitInputPixels` 50 MP, `.rotate()` and
+  sharp's own timeout; `sharp.concurrency(1)` per thread, so the pool decides how much of the
+  machine a conversion takes. The libuv pool stays free for sign-ins (argon2) and storage.
+  **SVG is rasterised in a child process** (`svg-render.child`) killed at the timeout, at most 2 at
+  once: librsvg renders in one call that no in-thread timeout can interrupt (decision F11).
 - **Atomic response**: the whole result is produced before the first byte is sent, then streamed
   (`StreamableFile`). A failure after headers are sent must be impossible by construction.
 - Headers: `Content-Type` of the target, `Content-Disposition: attachment; filename="converted.<ext>"`.

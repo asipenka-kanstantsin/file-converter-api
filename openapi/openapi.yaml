@@ -1249,6 +1249,18 @@ paths:
           $ref: '#/components/responses/FileTooLarge'
         '415':
           $ref: '#/components/responses/FileTypeNotSupported'
+        '503':
+          description: >-
+            PNG and JPEG: every conversion worker and the queue are busy. SVG: both rendering
+            processes are taken, which is counted separately from the worker pool. Retry shortly.
+          x-error-codes: [SERVICE_UNAVAILABLE]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '429':
           $ref: '#/components/responses/RateLimited'
         default:
