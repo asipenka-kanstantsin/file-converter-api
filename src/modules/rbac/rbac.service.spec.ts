@@ -102,6 +102,16 @@ describe('RbacService', () => {
       expect(rbac.can(['ghost'], 'docs', 'update')).toBe(false);
     });
 
+    it('covers an account only when the actor holds every right it holds (P7)', () => {
+      // admin holds rbac@manage and, through the implicit user role, docs@read.
+      expect(rbac.covers(['admin'], ['editor'])).toBe(false);
+      expect(rbac.covers(['editor'], ['admin'])).toBe(false);
+      expect(rbac.covers(['editor'], [])).toBe(true);
+      expect(rbac.covers(['editor'], ['editor'])).toBe(true);
+      expect(rbac.covers([], ['editor'])).toBe(false);
+      expect(rbac.covers(['admin', 'editor'], ['editor'])).toBe(true);
+    });
+
     it('recognises the protected grant', () => {
       expect(
         rbac.isProtectedGrant({ permissionId: 'p-rbac', roleId: 'admin' }),

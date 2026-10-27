@@ -306,6 +306,21 @@ describe('text conversion (docs/conversion-rules.md)', () => {
     expect(csv.split('\r\n')[1]).toBe(`'=HYPERLINK(1),'+1,'@x,-5,'-x,ok`);
   });
 
+  it('neutralises a formula that opens with a digit after the minus', () => {
+    const csv = convertText(
+      enc(
+        '[{"a":"-2+3+cmd|\' /C calc\'!A0","b":"-1+1+HYPERLINK(1)","c":"-1.5","d":"-.5","e":"-1e3","f":"-1-2"}]',
+      ),
+      'json',
+      'csv',
+    );
+
+    // Only cells that are a number in full stay unescaped.
+    expect(csv.split('\r\n')[1]).toBe(
+      `'-2+3+cmd|' /C calc'!A0,'-1+1+HYPERLINK(1),-1.5,-.5,-1e3,'-1-2`,
+    );
+  });
+
   it('keeps __proto__ and constructor as data from JSON and YAML, polluting nothing', () => {
     const json = convertText(
       enc('{"__proto__":{"polluted":"yes"},"constructor":"c"}'),

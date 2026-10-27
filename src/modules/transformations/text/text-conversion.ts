@@ -239,15 +239,19 @@ function rowsOf(value: Json): Json[] {
   return [current];
 }
 
-// Spreadsheets run a cell starting with = + @ (or a tab/CR, or - not starting a number) as a
-// formula; such cells get a leading apostrophe (OWASP "CSV injection", Notion 1.6 sanitisation).
-const FORMULA_START = /^(?:[=+@\t\r]|-(?![\d.]))/;
+// Spreadsheets run a cell starting with = + @ - (or a tab/CR) as a formula; such cells get a
+// leading apostrophe (OWASP "CSV injection", Notion 1.6 sanitisation). A leading `-` is only
+// safe when the whole cell is a number: `-5` is data, `-2+3+cmd|'/C calc'!A0` is a formula.
+const FORMULA_START = /^[=+@\t\r-]/;
+const PLAIN_NUMBER = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 
 function cell(value: Json): string {
   if (value === null) return '';
   const text =
     typeof value === 'object' ? JSON.stringify(value) : String(value);
-  return FORMULA_START.test(text) ? `'${text}` : text;
+  return FORMULA_START.test(text) && !PLAIN_NUMBER.test(text)
+    ? `'${text}`
+    : text;
 }
 
 // Nested objects become dot-separated columns; arrays inside a row become JSON text.

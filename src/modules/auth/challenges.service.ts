@@ -77,7 +77,8 @@ export class ChallengesService {
     challengeId: string,
   ): Promise<IssuedChallenge & { purpose: ChallengePurpose; userId: string }> {
     const challenge = await this.findPending(challengeId);
-    const cooldownMs = this.config.confirmation.resendCooldownSeconds * 1000;
+    const { maxResends, resendCooldownSeconds } = this.config.confirmation;
+    const cooldownMs = resendCooldownSeconds * 1000;
     const { code, secrets, token } = this.newSecrets();
     const sentBefore = new Date(secrets.sentAt.getTime() - cooldownMs);
     if (
@@ -85,9 +86,18 @@ export class ChallengesService {
         challenge.id,
         sentBefore,
         secrets,
+        maxResends,
       ))
     ) {
       const current = await this.findPending(challengeId);
+      // Out of resends is permanent for this challenge: a retryAfter would send the client back
+      // into the same wall. Waiting for the cooldown is the only one worth retrying.
+      if (current.rotations >= maxResends) {
+        throw new AppException(
+          ErrorCode.AUTH_CHALLENGE_RESEND_LIMIT,
+          HttpStatus.LOCKED,
+        );
+      }
       const retryAfter = Math.max(
         1,
         Math.ceil(

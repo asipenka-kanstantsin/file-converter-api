@@ -409,7 +409,9 @@ paths:
       summary: E-mail a new code and link for a pending challenge
       description: |
         Replaces the code and the link of the same challenge, resets the attempt counter and the
-        10-minute expiry. Allowed once per 60 seconds per challenge.
+        10-minute expiry. Allowed once per 60 seconds per challenge, and at most 3 times in the
+        life of one challenge — resetting the attempts is what limits guessing, so the resets are
+        limited too. After that, start the flow again.
       security:
         - csrfHeader: []
           csrfCookie: []
@@ -448,6 +450,16 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '403':
           $ref: '#/components/responses/CsrfInvalid'
+        '423':
+          description: This challenge has been resent the maximum number of times. Start over.
+          x-error-codes: [AUTH_CHALLENGE_RESEND_LIMIT]
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '429':
           $ref: '#/components/responses/RateLimited'
         default:
@@ -1079,6 +1091,8 @@ paths:
               schema:
                 type: string
                 pattern: '^attachment; filename="converted\.(csv|json|xml|yaml)"$'
+            X-Result-Saved:
+              $ref: '#/components/headers/ResultSaved'
             Cache-Control:
               schema:
                 type: string
@@ -1208,6 +1222,8 @@ paths:
               schema:
                 type: string
                 pattern: '^attachment; filename="converted\.(png|jpg)"$'
+            X-Result-Saved:
+              $ref: '#/components/headers/ResultSaved'
             Cache-Control:
               schema:
                 type: string
@@ -2413,6 +2429,14 @@ components:
         format: uuid
 
   headers:
+    ResultSaved:
+      description: >-
+        Only when the request set `save=true`: `true` when the result was taken for saving and a
+        download will appear in the history, `false` when it was not (too many saves in flight, or
+        the history row could not be written). The conversion itself succeeded either way.
+      schema:
+        type: string
+        enum: ['true', 'false']
     SetSessionCookies:
       description: >-
         `access_token=<JWT>; Path=/api; HttpOnly; SameSite=Lax` (15 min) and
@@ -2483,6 +2507,7 @@ components:
         - AUTH_CHALLENGE_EXPIRED
         - AUTH_CHALLENGE_INVALID
         - AUTH_CHALLENGE_LOCKED
+        - AUTH_CHALLENGE_RESEND_LIMIT
         - AUTH_CHALLENGE_OTHER_BROWSER
         - AUTH_CHALLENGE_SESSION_REQUIRED
         - AUTH_CODE_INVALID
@@ -2698,6 +2723,7 @@ components:
       pattern: '^[a-z][a-z0-9_-]{0,31}$'
     RoleInput:
       type: object
+      additionalProperties: false
       required: [name]
       properties:
         name:
@@ -2744,6 +2770,7 @@ components:
             $ref: '#/components/schemas/Role'
     PermissionInput:
       type: object
+      additionalProperties: false
       required: [name, actions]
       properties:
         name:
@@ -2796,6 +2823,7 @@ components:
             $ref: '#/components/schemas/Permission'
     GrantInput:
       type: object
+      additionalProperties: false
       required: [roleId, permissionId]
       properties:
         roleId:
@@ -2857,6 +2885,7 @@ components:
             $ref: '#/components/schemas/Grant'
     UserRolesInput:
       type: object
+      additionalProperties: false
       required: [roleIds]
       properties:
         roleIds:

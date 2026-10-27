@@ -111,11 +111,46 @@ export class RbacService implements OnModuleDestroy, OnModuleInit {
     });
   }
 
+  // Decision P7: an actor may only take over an account whose rights it already holds in full.
+  // Checking one permission (rbac@manage) left every other privileged account — settings, user
+  // administration — open to anyone holding users@update.
+  covers(
+    actorRoleIds: readonly string[],
+    targetRoleIds: readonly string[],
+  ): boolean {
+    for (const [permission, actions] of this.effective(targetRoleIds)) {
+      for (const action of actions) {
+        if (!this.can(actorRoleIds, permission, action)) return false;
+      }
+    }
+    return true;
+  }
+
   isProtectedGrant(grant: { permissionId: string; roleId: string }): boolean {
     const { adminRoleId, rbacPermissionId } = this.snapshot;
     return (
       grant.roleId === adminRoleId && grant.permissionId === rbacPermissionId
     );
+  }
+
+  // Every permission and action these roles grant, with 'all' expanded to the actions the code
+  // declares — an unknown permission grants nothing, as in `can`.
+  private effective(roleIds: readonly string[]): Map<string, Set<string>> {
+    const { grants, permissions } = this.snapshot;
+    const effective = new Map<string, Set<string>>();
+    for (const roleId of roleIds) {
+      for (const [permission, granted] of grants.get(roleId) ?? []) {
+        const declared = permissions.get(permission);
+        if (!declared) continue;
+        const actions = granted === 'all' ? declared : granted;
+        const into = effective.get(permission) ?? new Set<string>();
+        for (const action of actions) {
+          if (declared.has(action)) into.add(action);
+        }
+        effective.set(permission, into);
+      }
+    }
+    return effective;
   }
 
   // Reloads run one after another; each reads the DB afresh, so the last one always sees the

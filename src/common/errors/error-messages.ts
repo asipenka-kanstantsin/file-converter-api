@@ -14,6 +14,8 @@ export const ERROR_MESSAGES = {
     'Too many wrong codes. Request a new code.',
   [ErrorCode.AUTH_CHALLENGE_OTHER_BROWSER]:
     'Open the sign-in link in the browser where you started signing in, or enter the code.',
+  [ErrorCode.AUTH_CHALLENGE_RESEND_LIMIT]:
+    'This confirmation cannot be sent again. Start over.',
   [ErrorCode.AUTH_CHALLENGE_SESSION_REQUIRED]:
     'Open this link in a browser where you are signed in to this account, or enter the code.',
   [ErrorCode.AUTH_CODE_INVALID]: 'The code is incorrect.',

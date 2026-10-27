@@ -18,6 +18,7 @@ export class AppConfig {
   };
   readonly confirmation!: {
     maxAttempts: number;
+    maxResends: number;
     resendCooldownSeconds: number;
     ttlSeconds: number;
   };
@@ -53,6 +54,7 @@ export class AppConfig {
     limit: number;
     loginBlockSeconds: number;
     loginLimit: number;
+    loginWindowSeconds: number;
     mailLimit: number;
     profileLimit: number;
     ttlSeconds: number;
@@ -67,7 +69,7 @@ export function buildAppConfig(env: Env): AppConfig {
       jsonBodyLimit: env.APP_JSON_BODY_LIMIT,
       port: env.APP_PORT,
       publicUrl: env.APP_PUBLIC_URL.replace(/\/+$/, ''),
-      trustProxy: env.APP_TRUST_PROXY,
+      trustProxy: env.APP_TRUST_PROXY ?? 0,
     }),
     auth: Object.freeze({
       accessSecret: env.AUTH_JWT_ACCESS_SECRET,
@@ -79,6 +81,7 @@ export function buildAppConfig(env: Env): AppConfig {
     }),
     confirmation: Object.freeze({
       maxAttempts: env.CONFIRMATION_MAX_ATTEMPTS,
+      maxResends: env.CONFIRMATION_MAX_RESENDS,
       resendCooldownSeconds: env.CONFIRMATION_RESEND_COOLDOWN_SECONDS,
       ttlSeconds: env.CONFIRMATION_TTL_SECONDS,
     }),
@@ -120,6 +123,7 @@ export function buildAppConfig(env: Env): AppConfig {
       limit: env.THROTTLE_LIMIT,
       loginBlockSeconds: env.THROTTLE_LOGIN_BLOCK_SECONDS,
       loginLimit: env.THROTTLE_LOGIN_LIMIT,
+      loginWindowSeconds: env.THROTTLE_LOGIN_WINDOW_SECONDS,
       mailLimit: env.THROTTLE_MAIL_LIMIT,
       profileLimit: env.THROTTLE_PROFILE_LIMIT,
       ttlSeconds: env.THROTTLE_TTL_SECONDS,

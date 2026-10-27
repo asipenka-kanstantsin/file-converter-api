@@ -25,7 +25,7 @@ Run Step 0, then 1–3 in order.
 
 Use `requirements-check` to pull the AC. Pull it **again** even if the implementation run already did: record the page `version` from `docs/requirements/VERSIONS.tsv` and compare — a page edited mid-task is the first finding.
 
-Also read every time: **`docs/decisions.md`** (a `rejected` decision built anyway is critical; `proposed` rows are tested as written and listed for the mentor) and the **RBAC seed** (`prisma/seed.ts`: every role/permission that must be denied).
+Also read every time: **`docs/decisions.md`** (a `rejected` decision built anyway is critical; `proposed` rows are tested as written and listed for the mentor) and the **RBAC bootstrap** (`RbacService.ensureSystemConfiguration`: every role/permission that must be denied).
 
 Scope: `git status`, `git diff --stat origin/main`. AC clauses no code in the diff touches are `NOT IN SCOPE OF THIS CHANGE`, not silent passes. Snapshot `openapi/openapi.yaml` for the endpoints in scope — Step 2 compares it against what is observed.
 

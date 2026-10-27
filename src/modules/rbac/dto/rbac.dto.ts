@@ -21,26 +21,27 @@ function uniqueList<T extends z.ZodType>(item: T, min: number): z.ZodArray<T> {
 const actionsSchema = (min: number): z.ZodArray<typeof actionSchema> =>
   uniqueList(actionSchema, min);
 
-// Requests
+// Requests. Strict like every other write endpoint: a misspelled field is a 400, not a silent
+// no-op the caller reads as success (an "actions" typo would otherwise grant every action).
 
-export const roleInputSchema = z.object({
+export const roleInputSchema = z.strictObject({
   description: z.string().trim().max(500).optional(),
   name: roleNameSchema,
 });
 
-export const permissionInputSchema = z.object({
+export const permissionInputSchema = z.strictObject({
   actions: actionsSchema(1),
   name: permissionNameSchema,
 });
 
 // Notion "RBAC" 1.3.4: no or empty actions = every action of the permission.
-export const grantInputSchema = z.object({
+export const grantInputSchema = z.strictObject({
   actions: actionsSchema(0).default([]),
   permissionId: uuidSchema,
   roleId: uuidSchema,
 });
 
-export const userRolesInputSchema = z.object({
+export const userRolesInputSchema = z.strictObject({
   roleIds: uniqueList(uuidSchema, 0),
 });
 

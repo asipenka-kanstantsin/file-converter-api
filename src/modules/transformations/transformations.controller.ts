@@ -1,5 +1,3 @@
-import { Readable } from 'node:stream';
-
 import {
   Body,
   Controller,
@@ -8,19 +6,21 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  Res,
   type StreamableFile,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { createZodDto, ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 import { type AuthUser, CurrentUser } from '@/common/decorators';
 import { RateLimit } from '@/common/http/rate-limit';
-import { streamFile } from '@/common/http/streaming';
 import { requireFile, SingleFileUpload } from '@/common/http/upload';
 
 import { formatPairsSchema, saveFlagSchema } from './convert.dto';
+import { convertedFile } from './converted-file';
 import type { FormatPair } from './converter';
 import { TextConverter } from './text/text.converter';
 import { TransformationsService } from './transformations.service';
@@ -57,6 +57,7 @@ export class TransformationsController {
     @CurrentUser() actor: AuthUser,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() { save, targetFormat }: ConvertFileDto,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<StreamableFile> {
     const upload = requireFile(file);
     const result = await this.transformations.convert(actor, this.text, {
@@ -65,11 +66,7 @@ export class TransformationsController {
       save,
       target: targetFormat,
     });
-    return streamFile(Readable.from([result.body]), {
-      disposition: `attachment; filename="${result.filename}"`,
-      length: result.body.length,
-      type: result.mime,
-    });
+    return convertedFile(result, response);
   }
 
   @Get('formats')

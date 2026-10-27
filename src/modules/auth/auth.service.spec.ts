@@ -34,7 +34,12 @@ const user: User = {
 const session = { accessToken: 'a', refreshToken: 'r' };
 const config = {
   confirmation: { ttlSeconds: 600 },
-  throttle: { loginBlockSeconds: 900, loginLimit: 5, ttlSeconds: 60 },
+  throttle: {
+    loginBlockSeconds: 900,
+    loginLimit: 5,
+    loginWindowSeconds: 900,
+    ttlSeconds: 60,
+  },
 } as AppConfig;
 
 function challenge(overrides: Partial<Challenge>): Challenge {
@@ -47,6 +52,7 @@ function challenge(overrides: Partial<Challenge>): Challenge {
     lastSentAt: new Date(),
     newEmail: null,
     purpose: 'login',
+    rotations: 0,
     tokenVersion: 2,
     user: { email: user.email, id: user.id },
     ...overrides,

@@ -24,6 +24,10 @@ const MAX_TRACKED_KEYS = 10_000;
 // one client IP + e-mail within the window block that pair for 15 minutes; a successful sign-in
 // clears the count. An attempt reserves a slot before the password is checked, so parallel
 // requests cannot all pass the check before the first failure is recorded. Single-instance memory.
+//
+// The window is its own setting, not the throttler's 60 s: with a window that short an attacker
+// who stays just under the limit (four guesses a minute) is never locked out at all, which is the
+// pace a password brute force runs at anyway.
 @Injectable()
 export class LoginLockout {
   private readonly entries = new Map<string, Entry>();
@@ -35,7 +39,7 @@ export class LoginLockout {
   }
 
   begin(key: string, now = Date.now()): LoginAttempt {
-    const { loginLimit, ttlSeconds } = this.config.throttle;
+    const { loginLimit, loginWindowSeconds: ttlSeconds } = this.config.throttle;
     const entry = this.entries.get(key) ?? {
       blockedUntil: 0,
       failures: [],
@@ -108,7 +112,7 @@ export class LoginLockout {
   }
 
   private prune(now: number): void {
-    const windowStart = now - this.config.throttle.ttlSeconds * 1000;
+    const windowStart = now - this.config.throttle.loginWindowSeconds * 1000;
     for (const [key, entry] of this.entries) {
       const active =
         entry.inFlight > 0 ||
@@ -119,7 +123,11 @@ export class LoginLockout {
   }
 
   private recordFailure(entry: Entry, now: number): void {
-    const { loginBlockSeconds, loginLimit, ttlSeconds } = this.config.throttle;
+    const {
+      loginBlockSeconds,
+      loginLimit,
+      loginWindowSeconds: ttlSeconds,
+    } = this.config.throttle;
     const windowStart = now - ttlSeconds * 1000;
     entry.failures = [...entry.failures.filter((at) => at > windowStart), now];
     if (entry.failures.length >= loginLimit) {

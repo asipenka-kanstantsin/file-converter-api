@@ -34,4 +34,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
+      # The migrations are hand-edited (CHECK constraints and expression indexes that
+      # schema.prisma cannot express), so nothing but this catches a schema that has drifted away
+      # from the chain that builds it. Needs the chain applied first; the e2e runs are happy to
+      # find the database already migrated.
+      - run: npm run db:migrate
+      - run: npm run db:drift
       - run: npm run verify

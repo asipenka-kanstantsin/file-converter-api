@@ -20,6 +20,7 @@ const challengeSelect = {
   lastSentAt: true,
   newEmail: true,
   purpose: true,
+  rotations: true,
   tokenVersion: true,
   user: { select: { email: true, id: true } },
 } as const;
@@ -118,11 +119,14 @@ export class ChallengesRepository {
     return row ? { attempts: row.attempts, codeHash: row.code_hash } : null;
   }
 
-  // Rotates only when the resend cooldown has passed, so concurrent resends send one mail.
+  // Rotates only when the resend cooldown has passed, so concurrent resends send one mail, and
+  // only while rotations are left: clearing `attempts` is what bounds guessing, so the number of
+  // times it may be cleared has to be bounded too (A4).
   async rotateIfDue(
     id: string,
     sentBefore: Date,
     secrets: ChallengeSecrets,
+    maxRotations: number,
   ): Promise<boolean> {
     const { count } = await this.txHost.tx.challenge.updateMany({
       data: {
@@ -130,9 +134,15 @@ export class ChallengesRepository {
         codeHash: secrets.codeHash,
         expiresAt: secrets.expiresAt,
         lastSentAt: secrets.sentAt,
+        rotations: { increment: 1 },
         tokenHash: secrets.tokenHash,
       },
-      where: { consumedAt: null, id, lastSentAt: { lte: sentBefore } },
+      where: {
+        consumedAt: null,
+        id,
+        lastSentAt: { lte: sentBefore },
+        rotations: { lt: maxRotations },
+      },
     });
     return count === 1;
   }

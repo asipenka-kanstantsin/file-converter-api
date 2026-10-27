@@ -36,7 +36,16 @@ export function SingleFileUpload(
       const maxBytes =
         typeof limit === 'number' ? limit : await limit(this.moduleRef);
       const upload = multer({
-        limits: { fields: 10, files: 1, fileSize: maxBytes, parts: 12 },
+        // The text fields carry a target format, a flag and a small options object; without a
+        // size of their own multer would buffer multer's 1 MB default for each of the 10.
+        limits: {
+          fieldNameSize: 64,
+          fields: 10,
+          fieldSize: 2048,
+          files: 1,
+          fileSize: maxBytes,
+          parts: 12,
+        },
         storage: multer.memoryStorage(),
       }).single(field);
       const http = context.switchToHttp();

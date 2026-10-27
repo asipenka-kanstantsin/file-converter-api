@@ -73,7 +73,7 @@ import { defineConfig, env } from "prisma/config";
 
 export default defineConfig({
   datasource: { url: env("DATABASE_URL") },
-  migrations: { path: "prisma/migrations", seed: "ts-node prisma/seed.ts" },
+  migrations: { path: "prisma/migrations" },
   schema: "prisma/schema.prisma",
 });
 ```
@@ -224,7 +224,10 @@ each:
 
 ## Seeding
 
-`prisma/seed.ts` (`npm run db:seed` → `prisma db seed`, wired in `prisma.config.ts`) is idempotent
+This project has **no seed**: the roles, permissions and the protected admin grant are created
+at startup by `RbacService.ensureSystemConfiguration`, so a fresh database needs no extra step.
+When a project does need one, `prisma/seed.ts` (`npm run db:seed` → `prisma db seed`, wired in
+`prisma.config.ts`) is idempotent
 (`upsert` by natural key), dev/test only, and reads config through `loadAppConfig()` from
 `src/config`, not `process.env`. `migrate dev` / `migrate reset` do not seed automatically in
 Prisma 7.

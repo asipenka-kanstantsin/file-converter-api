@@ -20,6 +20,11 @@ const positiveInt = z.coerce.number().int().positive();
 
 const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
 
+// The markers the committed .env.example and the usual copy-paste samples carry. A secret still
+// wearing one of them has never been generated for this deployment.
+const PLACEHOLDER_SECRET =
+  /change[-_]?me|not[-_]?for[-_]?production|placeholder|example|secret[-_]?here|xxxx/i;
+
 export const envSchema = z
   .object({
     APP_CORS_ORIGINS: commaList.pipe(z.array(z.url()).min(1)),
@@ -29,7 +34,10 @@ export const envSchema = z
       .default('1mb'),
     APP_PORT: z.coerce.number().int().min(1).max(65_535).default(3001),
     APP_PUBLIC_URL: z.url(),
-    APP_TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+    // No default in production: behind a proxy an unset value puts every client on one IP (the
+    // rate limits then apply to all of them together), and too high a value lets a client spoof
+    // X-Forwarded-For past them. The deployment has to say which it is.
+    APP_TRUST_PROXY: z.coerce.number().int().min(0).optional(),
     AUTH_ACCESS_TTL_SECONDS: positiveInt.default(900),
     AUTH_COOKIE_SECURE: booleanString.default(true),
     AUTH_JWT_ACCESS_SECRET: z.string().min(32),
@@ -37,6 +45,7 @@ export const envSchema = z
     AUTH_OTP_PEPPER: z.string().min(32),
     AUTH_REFRESH_TTL_SECONDS: positiveInt.default(2_592_000),
     CONFIRMATION_MAX_ATTEMPTS: positiveInt.default(5),
+    CONFIRMATION_MAX_RESENDS: positiveInt.default(3),
     CONFIRMATION_RESEND_COOLDOWN_SECONDS: positiveInt.default(60),
     CONFIRMATION_TTL_SECONDS: positiveInt.default(600),
     CONVERSION_TIMEOUT_MS: positiveInt.default(30_000),
@@ -66,6 +75,7 @@ export const envSchema = z
     THROTTLE_LIMIT: positiveInt.default(100),
     THROTTLE_LOGIN_BLOCK_SECONDS: positiveInt.default(900),
     THROTTLE_LOGIN_LIMIT: positiveInt.default(5),
+    THROTTLE_LOGIN_WINDOW_SECONDS: positiveInt.default(900),
     THROTTLE_MAIL_LIMIT: positiveInt.default(3),
     THROTTLE_PROFILE_LIMIT: positiveInt.default(60),
     THROTTLE_TTL_SECONDS: positiveInt.default(60),
@@ -95,12 +105,43 @@ export const envSchema = z
         });
       }
     }
+    if (env.APP_TRUST_PROXY === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'production_requires_explicit_trust_proxy',
+        path: ['APP_TRUST_PROXY'],
+      });
+    }
     if (env.AUTH_JWT_ACCESS_SECRET === env.AUTH_JWT_REFRESH_SECRET) {
       ctx.addIssue({
         code: 'custom',
         message: 'jwt_secrets_must_differ',
         path: ['AUTH_JWT_REFRESH_SECRET'],
       });
+    }
+    // The pepper hashes the OTP codes; sharing it with a signing key would let one leak void both.
+    if (
+      env.AUTH_OTP_PEPPER === env.AUTH_JWT_ACCESS_SECRET ||
+      env.AUTH_OTP_PEPPER === env.AUTH_JWT_REFRESH_SECRET
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'otp_pepper_must_differ_from_jwt_secrets',
+        path: ['AUTH_OTP_PEPPER'],
+      });
+    }
+    for (const key of [
+      'AUTH_JWT_ACCESS_SECRET',
+      'AUTH_JWT_REFRESH_SECRET',
+      'AUTH_OTP_PEPPER',
+    ] as const) {
+      if (PLACEHOLDER_SECRET.test(env[key])) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'production_secret_is_a_placeholder',
+          path: [key],
+        });
+      }
     }
     if (!env.AUTH_COOKIE_SECURE) {
       ctx.addIssue({
