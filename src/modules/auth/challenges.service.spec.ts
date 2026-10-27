@@ -1,3 +1,5 @@
+import { HttpStatus } from '@nestjs/common';
+
 import { ErrorCode } from '@/common/errors';
 import type { AppConfig } from '@/config';
 import type { MailService } from '@/infrastructure/mail';
@@ -11,7 +13,12 @@ const PEPPER = 'p'.repeat(32);
 const config = {
   app: { publicUrl: 'https://api.example.com' },
   auth: { otpPepper: PEPPER },
-  confirmation: { maxAttempts: 5, resendCooldownSeconds: 60, ttlSeconds: 600 },
+  confirmation: {
+    maxAttempts: 5,
+    maxResends: 3,
+    resendCooldownSeconds: 60,
+    ttlSeconds: 600,
+  },
 } as AppConfig;
 
 function challenge(overrides: Partial<Challenge> = {}): Challenge {
@@ -24,6 +31,7 @@ function challenge(overrides: Partial<Challenge> = {}): Challenge {
     lastSentAt: new Date(Date.now() - 120_000),
     newEmail: null,
     purpose: 'registration',
+    rotations: 0,
     tokenVersion: null,
     user: { email: 'jane@example.com', id: 'u1' },
     ...overrides,
@@ -226,6 +234,43 @@ describe('ChallengesService', () => {
     await expect(service.resend('c1')).rejects.toMatchObject({
       code: ErrorCode.RATE_LIMITED,
       context: { retryAfter: 50 },
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('passes the resend ceiling to the conditional rotation', async () => {
+    const rotateIfDue = jest.fn().mockResolvedValue(true);
+    const { service } = setup({
+      findById: () => Promise.resolve(challenge()),
+      rotateIfDue,
+    });
+
+    await service.resend('c1');
+
+    expect(rotateIfDue).toHaveBeenCalledWith(
+      'c1',
+      expect.any(Date),
+      expect.any(Object),
+      3,
+    );
+  });
+
+  it('refuses a further resend once the ceiling is reached, and not with a retryAfter', async () => {
+    const { enqueue, service } = setup({
+      // The cooldown has long passed: only the ceiling can be refusing this one.
+      findById: () =>
+        Promise.resolve(
+          challenge({
+            lastSentAt: new Date(Date.now() - 600_000),
+            rotations: 3,
+          }),
+        ),
+      rotateIfDue: () => Promise.resolve(false),
+    });
+
+    await expect(service.resend('c1')).rejects.toMatchObject({
+      code: ErrorCode.AUTH_CHALLENGE_RESEND_LIMIT,
+      status: HttpStatus.LOCKED,
     });
     expect(enqueue).not.toHaveBeenCalled();
   });

@@ -11,6 +11,7 @@ export interface Challenge {
   // email_change only: the address being confirmed, where the mail goes.
   newEmail: null | string;
   purpose: ChallengePurpose;
+  rotations: number;
   tokenVersion: number | null;
   user: { email: string; id: string };
 }

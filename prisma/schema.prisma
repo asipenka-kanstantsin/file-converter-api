@@ -119,6 +119,9 @@ model Challenge {
   // The address an email_change challenge confirms; the mail goes there.
   newEmail     String?          @map("new_email") @db.VarChar(254)
   attempts     Int              @default(0)
+  // Resends so far (A4): each one clears `attempts`, so without a ceiling the five guesses could
+  // be taken again for as long as the attacker keeps asking for a new code.
+  rotations    Int              @default(0) @db.SmallInt
   expiresAt    DateTime         @map("expires_at") @db.Timestamptz(3)
   lastSentAt   DateTime         @map("last_sent_at") @db.Timestamptz(3)
   consumedAt   DateTime?        @map("consumed_at") @db.Timestamptz(3)

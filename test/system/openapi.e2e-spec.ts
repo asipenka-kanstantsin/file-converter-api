@@ -41,9 +41,28 @@ describe('OpenAPI document', () => {
     expectContract('get', '/api/docs', res);
     expect(res.headers['content-type']).toMatch(/^text\/html/);
     expect(res.headers['content-security-policy']).toMatch(
-      /script-src https:\/\/cdn\.jsdelivr\.net\/npm\/swagger-ui-dist@5\/ 'sha256-/,
+      /script-src https:\/\/cdn\.jsdelivr\.net\/npm\/swagger-ui-dist@\d+\.\d+\.\d+\/ 'sha256-/,
     );
     expect(res.text).toContain("url: '/api/openapi.json'");
+  });
+
+  it('loads Swagger UI from an exact version with subresource integrity', async () => {
+    const res = await request(app.getHttpServer()).get('/api/docs').expect(200);
+
+    // A floating tag plus no integrity would let a compromised CDN run code on the API's own
+    // origin, where it can read csrf_token and call the API as whoever is signed in.
+    const assets = [
+      ...res.text.matchAll(
+        /(?:src|href)="(https:\/\/cdn\.jsdelivr\.net\/npm\/swagger-ui-dist@([^/"]+)\/[^"]+)"[^>]*?integrity="(sha\d{3}-[A-Za-z0-9+/=]+)"[^>]*?crossorigin="anonymous"/g,
+      ),
+    ];
+
+    expect(assets).toHaveLength(2);
+    for (const [, , version] of assets) {
+      expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+    }
+    // Nothing is pulled from the CDN without an integrity attribute.
+    expect(res.text.match(/cdn\.jsdelivr\.net/g)).toHaveLength(2);
   });
 
   it('sends hardening headers and no x-powered-by', async () => {

@@ -3,6 +3,7 @@ import { InvalidConfigError, parseAppConfig } from './load-app-config';
 const validEnv = {
   APP_CORS_ORIGINS: 'https://app.example.com, https://admin.example.com',
   APP_PUBLIC_URL: 'https://api.example.com/',
+  APP_TRUST_PROXY: '1',
   AUTH_JWT_ACCESS_SECRET: 'a'.repeat(32),
   AUTH_JWT_REFRESH_SECRET: 'r'.repeat(32),
   AUTH_OTP_PEPPER: 'p'.repeat(32),
@@ -24,10 +25,11 @@ describe('parseAppConfig', () => {
       jsonBodyLimit: '1mb',
       port: 3001,
       publicUrl: 'https://api.example.com',
-      trustProxy: 0,
+      trustProxy: 1,
     });
     expect(config.confirmation).toEqual({
       maxAttempts: 5,
+      maxResends: 3,
       resendCooldownSeconds: 60,
       ttlSeconds: 600,
     });
@@ -45,6 +47,7 @@ describe('parseAppConfig', () => {
       limit: 100,
       loginBlockSeconds: 900,
       loginLimit: 5,
+      loginWindowSeconds: 900,
       mailLimit: 3,
       profileLimit: 60,
       ttlSeconds: 60,
@@ -111,6 +114,34 @@ describe('parseAppConfig', () => {
     expect(() =>
       parseAppConfig({ ...validEnv, AUTH_JWT_REFRESH_SECRET: 'a'.repeat(32) }),
     ).toThrow(/AUTH_JWT_REFRESH_SECRET/);
+  });
+
+  it('refuses an OTP pepper that repeats a signing secret in production', () => {
+    expect(() =>
+      parseAppConfig({ ...validEnv, AUTH_OTP_PEPPER: 'r'.repeat(32) }),
+    ).toThrow(/AUTH_OTP_PEPPER/);
+  });
+
+  it.each([
+    'AUTH_JWT_ACCESS_SECRET',
+    'AUTH_JWT_REFRESH_SECRET',
+    'AUTH_OTP_PEPPER',
+  ])('refuses the placeholder %s shipped in .env.example', (key) => {
+    expect(() =>
+      parseAppConfig({
+        ...validEnv,
+        [key]: 'change-me-32-chars-minimum-xxxxxxxxxxxx',
+      }),
+    ).toThrow(new RegExp(key));
+  });
+
+  it('requires an explicit APP_TRUST_PROXY in production only', () => {
+    const { APP_TRUST_PROXY: _omitted, ...rest } = validEnv;
+
+    expect(() => parseAppConfig(rest)).toThrow(/APP_TRUST_PROXY/);
+    expect(
+      parseAppConfig({ ...rest, NODE_ENV: 'development' }).app.trustProxy,
+    ).toBe(0);
   });
 
   it('requires secure cookies and SMTP credentials in production', () => {

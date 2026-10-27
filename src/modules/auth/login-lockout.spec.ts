@@ -4,7 +4,12 @@ import type { AppConfig } from '@/config';
 import { LoginLockout } from './login-lockout';
 
 const config = {
-  throttle: { loginBlockSeconds: 900, loginLimit: 3, ttlSeconds: 60 },
+  throttle: {
+    loginBlockSeconds: 900,
+    loginLimit: 3,
+    loginWindowSeconds: 900,
+    ttlSeconds: 60,
+  },
 } as AppConfig;
 
 const key = LoginLockout.keyOf('10.0.0.1', 'jane@example.com');
@@ -14,6 +19,25 @@ function failTimes(lockout: LoginLockout, count: number): void {
 }
 
 describe('LoginLockout', () => {
+  it('counts failures spread wider than the throttler window, so a slow brute force locks', () => {
+    // One failure every 70 s. Under a 60 s window each one aged out before the next arrived and
+    // the pair was never blocked — which is the pace a password brute force runs at.
+    jest.useFakeTimers();
+    try {
+      const lockout = new LoginLockout(config);
+      for (let i = 0; i < 3; i++) {
+        lockout.begin(key).fail();
+        jest.advanceTimersByTime(70_000);
+      }
+
+      expect(() => lockout.begin(key)).toThrow(
+        expect.objectContaining({ code: ErrorCode.RATE_LIMITED }) as Error,
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('allows attempts below the limit', () => {
     const lockout = new LoginLockout(config);
     failTimes(lockout, 2);

@@ -14,6 +14,7 @@ import {
   type SignedInUser,
   signedInUser,
 } from '../helpers/auth';
+import { AppConfig, testConfig } from '../helpers/config';
 import { expectContract } from '../helpers/contract';
 import { prismaOf, resetDatabase } from '../helpers/db';
 import { deliverOutbox } from '../helpers/http';
@@ -288,5 +289,43 @@ describe('profile photo with the storage down', () => {
       'STORAGE_UNAVAILABLE',
     ]);
     expect(await prismaOf(app).file.count()).toBe(0);
+  });
+});
+
+// The `upload` group had no test either: .env.test raises every limit to 10 000.
+describe('PUT /api/users/{userId}/photo rate limit', () => {
+  let app: NestExpressApplication;
+
+  beforeAll(async () => {
+    app = await createTestApp((builder) =>
+      builder
+        .overrideProvider(AppConfig)
+        .useValue(testConfig({ throttle: { uploadLimit: 2 } })),
+    );
+    await resetDatabase(app);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('answers 429 once the upload group is exhausted', async () => {
+    const me = await signedInUser(app);
+    const url = `/api/users/${me.id}/photo`;
+    const image = await png();
+    const statuses: number[] = [];
+
+    for (let i = 0; i < 3; i++) {
+      const res = await me.client.agent
+        .put(url)
+        .set('X-CSRF-Token', me.client.csrf)
+        .attach('file', image, 'photo.png')
+        .buffer(true)
+        .parse(binary);
+      expectContract('put', url, res);
+      statuses.push(res.status);
+    }
+
+    expect(statuses).toEqual([200, 200, 429]);
   });
 });

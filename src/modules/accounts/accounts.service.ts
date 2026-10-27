@@ -318,20 +318,16 @@ export class AccountsService {
     return isSelf;
   }
 
-  // Changing the e-mail or status of an account that administers RBAC hands over that
-  // account (the e-mail is how it is recovered): only someone holding rbac@manage may (P7).
+  // Changing the e-mail or status of another account hands that account over (the e-mail is how
+  // it is recovered, and blocking it silences its owner): only an actor who already holds every
+  // right the target holds may (P7). Narrowing this to rbac@manage left the holders of
+  // settings@manage, users@delete and the rest open to anyone with users@update.
   private async assertMayTakeOver(
     actor: AuthUser,
     userId: string,
   ): Promise<void> {
     const target = await this.users.findSessionUser(userId);
-    if (
-      target &&
-      this.rbac.can(target.roleIds, 'rbac', 'manage') &&
-      !this.rbac.can(actor.roleIds, 'rbac', 'manage')
-    ) {
-      forbidden();
-    }
+    if (target && !this.rbac.covers(actor.roleIds, target.roleIds)) forbidden();
   }
 
   // One transaction (Notion 1.6). Lock order as everywhere: the admin role (when blocking, so

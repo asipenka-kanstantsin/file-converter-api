@@ -21,7 +21,6 @@ npm run test:e2e      # e2e suite; starts its own Postgres and SMTP sink, no doc
 npm run test:e2e:s3   # S3 adapter suite only — needs `docker compose up -d`
 npm run db:migrate    # apply pending migrations
 npm run db:generate   # generate a migration from the schema diff
-npm run db:seed       # seed dev data
 npm run openapi:lint  # Redocly lint of openapi/openapi.yaml
 npm run verify        # the whole PR gate, locally
 docker compose up -d  # dev only: Postgres 18, Mailpit (UI :8025), SeaweedFS (S3 API :8333)

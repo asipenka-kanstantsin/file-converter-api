@@ -8,12 +8,15 @@ import {
 } from '@nestjs/common';
 
 import { AppException, ErrorCode } from '@/common/errors';
-import { AppConfig } from '@/config';
+import { AppConfig, childProcessEnv } from '@/config';
 
 import type { SvgRenderJob, SvgRenderResult } from './svg-render.child';
 
 // Renders at once; beyond it the request gets 503 (each render may hold up to the max raster).
 const MAX_RENDERS = 2;
+// The child only holds the document and the pipeline's handles — libvips keeps pixels in its own
+// memory. A cap, so a sanitiser or parser blow-up ends the child instead of the machine.
+const CHILD_HEAP_MB = 256;
 
 function childFile(): string {
   return __filename.endsWith('.ts')
@@ -54,6 +57,10 @@ export class SvgRenderer implements BeforeApplicationShutdown {
   private run(job: SvgRenderJob): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const child = fork(childFile(), [], {
+        // Hostile input is parsed here: no inherited secrets, no inherited node flags, bounded
+        // heap (SEC: the child must survive nothing the API process would miss).
+        env: childProcessEnv(),
+        execArgv: [`--max-old-space-size=${String(CHILD_HEAP_MB)}`],
         serialization: 'advanced',
         stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
       });

@@ -1,3 +1,4 @@
+import { Transactional } from '@nestjs-cls/transactional';
 import {
   HttpStatus,
   Injectable,
@@ -11,8 +12,9 @@ import { FilesService } from '@/modules/files';
 import { type NumberSettingKey, SettingsService } from '@/modules/settings';
 import { UsersService } from '@/modules/users';
 
-import type { Converter } from './converter';
+import type { Converter, TransformationType } from './converter';
 import { TransformationsRepository } from './transformations.repository';
+import { UserSlots } from './user-slots';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 // A saved result may be larger than its input (JSON → XML); past this it is not saved (Notion
@@ -20,6 +22,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const SAVE_MAX_BYTES = 50 * 1024 * 1024;
 // Background saves at once; beyond it a result is not saved (logged), so memory stays bounded.
 const MAX_CONCURRENT_SAVES = 4;
+// Conversions one account may run at once, by kind — see UserSlots for why image is the lower.
+const PER_USER_SLOTS: Readonly<Record<TransformationType, number>> = {
+  file: 4,
+  image: 1,
+};
 
 export interface ConversionRequest {
   filename: string | undefined;
@@ -33,6 +40,9 @@ export interface ConversionResult {
   body: Buffer;
   filename: string;
   mime: string;
+  // Only when the request asked for one: whether the result was taken for saving. False means the
+  // conversion succeeded but nothing will be downloadable later (REL: the client is told, F13).
+  saved?: boolean;
 }
 
 interface Recorded {
@@ -57,6 +67,10 @@ function limitKey(format: string): NumberSettingKey {
 export class TransformationsService implements OnModuleDestroy {
   private readonly logger = new Logger(TransformationsService.name);
   private readonly saving = new Set<Promise<void>>();
+  private readonly slots: Readonly<Record<TransformationType, UserSlots>> = {
+    file: new UserSlots(PER_USER_SLOTS.file),
+    image: new UserSlots(PER_USER_SLOTS.image),
+  };
 
   constructor(
     private readonly files: FilesService,
@@ -114,31 +128,51 @@ export class TransformationsService implements OnModuleDestroy {
           { source, target: request.target },
         );
       }
-      const body = await converter.convert(
-        request.input,
-        source,
-        request.target,
-        request.options,
-      );
+      const release = this.slots[converter.type].take(actor.id);
+      let body: Buffer;
+      try {
+        body = await converter.convert(
+          request.input,
+          source,
+          request.target,
+          request.options,
+        );
+      } finally {
+        release();
+      }
       const durationMs = Date.now() - started;
+      // The conversion is done; a history write that fails must not turn it into a 500. It is
+      // logged and the result still goes out — without an id, so nothing is saved either.
       const recorded = await this.record(
         { ...base, durationMs, sourceFormat: source },
         null,
-      );
+      ).catch((recordError: unknown) => {
+        this.logger.error(
+          { err: recordError },
+          'conversion history not recorded',
+        );
+        return undefined;
+      });
       this.logger.log(
         {
           ...this.audit(base, source, durationMs),
           result: 'success',
-          transformationId: recorded.id,
+          transformationId: recorded?.id,
         },
         'conversion succeeded',
       );
       const extension = converter.extensionOf(request.target);
       const mime = converter.mimeOf(request.target);
-      if (request.save) {
+      const saved =
+        request.save &&
+        recorded !== undefined &&
         this.saveInBackground(actor.id, recorded, body, mime, extension);
-      }
-      return { body, filename: `converted.${extension}`, mime };
+      return {
+        body,
+        filename: `converted.${extension}`,
+        mime,
+        ...(request.save ? { saved } : {}),
+      };
     } catch (error: unknown) {
       const durationMs = Date.now() - started;
       const code = errorCodeOf(error);
@@ -176,6 +210,10 @@ export class TransformationsService implements OnModuleDestroy {
     await this.idle();
   }
 
+  // Undefined when the account is gone: a conversion that was still running when its owner was
+  // deleted must not leave a history row on the tombstone, which the deletion transaction (D1)
+  // has already swept past.
+  @Transactional()
   private async record(
     fields: {
       durationMs: number;
@@ -186,7 +224,11 @@ export class TransformationsService implements OnModuleDestroy {
       userId: string;
     },
     errorCode: null | string,
-  ): Promise<Recorded> {
+  ): Promise<Recorded | undefined> {
+    // The owner's row, shared, as on the save path: a deletion holds it for update, so it either
+    // finished before this — and there is nothing left to write onto — or waits for this insert
+    // and removes the row together with the rest of the account.
+    if (!(await this.users.lockForShare(fields.userId))) return undefined;
     const retentionDays = await this.settings.number('history.retentionDays');
     const expiresAt = new Date(Date.now() + retentionDays * DAY_MS);
     const id = await this.repository.create({
@@ -219,14 +261,15 @@ export class TransformationsService implements OnModuleDestroy {
   }
 
   // Notion "Сохранение результатов": never blocks the response; a failure is logged and leaves
-  // the history row without a file.
+  // the history row without a file. Returns whether the result was taken at all — the caller
+  // reports that to the client, which would otherwise read a 200 as "it is saved".
   private saveInBackground(
     userId: string,
     recorded: Recorded,
     body: Buffer,
     mime: string,
     extension: string,
-  ): void {
+  ): boolean {
     const audit = {
       action: 'save',
       fileSize: body.length,
@@ -238,7 +281,7 @@ export class TransformationsService implements OnModuleDestroy {
         { ...audit, reason: 'busy', result: 'error' },
         'result not saved',
       );
-      return;
+      return false;
     }
     const task = this.saveResult(
       audit,
@@ -250,6 +293,7 @@ export class TransformationsService implements OnModuleDestroy {
       this.saving.delete(task);
     });
     this.saving.add(task);
+    return true;
   }
 
   private async saveResult(

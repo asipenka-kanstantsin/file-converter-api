@@ -31,6 +31,12 @@ export type SvgRenderResult =
 // Notion 1.3.1: without an intrinsic size, a default.
 const DEFAULT_SIZE = { height: 150, width: 300 };
 const MAX_DENSITY = 100_000;
+// librsvg rasterises `intrinsic size x density / 72`, whatever size the caller asked for, and
+// density has a floor of 1. A document declaring `width="1e7"` therefore paints ~139k x 139k
+// pixels for a 100 px request — only the 30 s timeout stood between that and the machine's
+// memory. The surface itself is bounded here; 50 MP is three times the largest output the
+// settings allow (4096 x 4096).
+const MAX_RENDER_PIXELS = 50_000_000;
 
 class Refused extends Error {
   constructor(
@@ -41,7 +47,7 @@ class Refused extends Error {
   }
 }
 
-async function render(job: SvgRenderJob): Promise<Uint8Array> {
+export async function render(job: SvgRenderJob): Promise<Uint8Array> {
   let svg: Buffer;
   try {
     svg = sanitizeSvg(job.input);
@@ -89,6 +95,15 @@ async function render(job: SvgRenderJob): Promise<Uint8Array> {
   // The density that renders the document at the target size directly (no upscaled bitmap).
   const scale = Math.max(width / intrinsicWidth, height / intrinsicHeight);
   const density = Math.min(MAX_DENSITY, Math.max(1, 72 * scale));
+  // What librsvg will actually paint, which the output size alone does not bound.
+  const surface =
+    ((intrinsicWidth * density) / 72) * ((intrinsicHeight * density) / 72);
+  if (surface > MAX_RENDER_PIXELS) {
+    throw new Refused('IMAGE_TOO_LARGE', {
+      maxHeight: job.maxHeight,
+      maxWidth: job.maxWidth,
+    });
+  }
   const pipeline = sharp(svg, { density, limitInputPixels: false })
     .resize({ fit: 'fill', height, width })
     .flatten({ background: job.background });

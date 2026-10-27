@@ -346,3 +346,36 @@ describe('POST /api/convert with a tiny timeout', () => {
     expect(row?.errorCode).toBe('CONVERSION_TIMEOUT');
   });
 });
+
+// The `convert` group was the one rate limit no test exercised: .env.test raises every limit to
+// 10 000, so only an override makes it reachable.
+describe('POST /api/convert rate limit', () => {
+  let app: NestExpressApplication;
+
+  beforeAll(async () => {
+    app = await createTestApp((builder) =>
+      builder
+        .overrideProvider(AppConfig)
+        .useValue(testConfig({ throttle: { convertLimit: 2 } })),
+    );
+    await resetDatabase(app);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('answers 429 once the convert group is exhausted', async () => {
+    const me = await signedInUser(app);
+    const statuses: number[] = [];
+
+    for (let i = 0; i < 3; i++) {
+      const res = await convert(app, me, CSV, 'people.csv', {
+        targetFormat: 'json',
+      });
+      statuses.push(res.status);
+    }
+
+    expect(statuses).toEqual([200, 200, 429]);
+  });
+});
