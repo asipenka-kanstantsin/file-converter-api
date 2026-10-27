@@ -365,7 +365,7 @@ export class AuthService {
     }
     const user = locked ?? (await this.users.getActive(challenge.user.id));
     if (user.status !== 'active') invalidChallenge();
-    // Password reset, deletion or a block since it started void it (decision A2).
+    // A deletion or a block since it started voids it (decision A2).
     if (challenge.tokenVersion !== user.tokenVersion) invalidChallenge();
     if (handler) return handler.complete(user.id);
     // An account change whose module did not register: never fall through to a sign-in.

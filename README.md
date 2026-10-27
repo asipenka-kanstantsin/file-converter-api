@@ -42,6 +42,45 @@ The one suite that does need the dev stack is the S3 adapter's:
 docker compose up -d && npm run test:e2e:s3
 ```
 
+## Deploying
+
+```bash
+docker build -t file-converter-api .
+docker build -t file-converter-api-migrate --target migrate .   # release step
+```
+
+The runtime image carries `dist/` and the production dependencies only; it runs as `node` and its
+`HEALTHCHECK` polls `/health/ready`.
+
+**Every release applies the migration chain before the new version starts.** The `migrate` target
+exists for exactly that — it keeps the dev dependencies, because the Prisma CLI is one and
+`prisma.config.ts` is what carries the datasource URL:
+
+```bash
+docker run --rm -e DATABASE_URL=... file-converter-api-migrate
+```
+
+Migrations are **forward-fix only**: there are no down migrations, and a bad one is corrected by
+appending another, never by editing or reverting a migration that has been applied anywhere. CI
+runs `npm run db:drift` so the chain and `prisma/schema.prisma` cannot diverge unnoticed.
+
+Required configuration is in [`.env.example`](.env.example); the process exits on startup if any
+of it is invalid. In production the config additionally refuses placeholder secrets, an `APP_TRUST_PROXY`
+that was never set, non-HTTPS CORS origins and SMTP without credentials.
+
+### One instance at a time
+
+Several pieces of state live in process memory, so the API **must run as a single replica** until
+they move to Postgres or Redis:
+
+| State | Where | What a second replica would break |
+|---|---|---|
+| RBAC roles, permissions and grants | `RbacService` snapshot | A grant revoked on one replica stays in force on the others until restart |
+| Sign-in lockout | `LoginLockout` | The failure count is per replica, so the limit is effectively multiplied |
+| Rate limiting | `@nestjs/throttler` in-memory store | Same |
+| Per-account conversion slots | `UserSlots` | Same |
+| Background saves in flight | `TransformationsService` | Only the cap, which is per replica by design |
+
 ## Where things are
 
 | Path | What |

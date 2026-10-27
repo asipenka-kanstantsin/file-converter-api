@@ -1,3 +1,4 @@
+import { Transactional } from '@nestjs-cls/transactional';
 import {
   HttpStatus,
   Injectable,
@@ -209,6 +210,10 @@ export class TransformationsService implements OnModuleDestroy {
     await this.idle();
   }
 
+  // Undefined when the account is gone: a conversion that was still running when its owner was
+  // deleted must not leave a history row on the tombstone, which the deletion transaction (D1)
+  // has already swept past.
+  @Transactional()
   private async record(
     fields: {
       durationMs: number;
@@ -219,7 +224,11 @@ export class TransformationsService implements OnModuleDestroy {
       userId: string;
     },
     errorCode: null | string,
-  ): Promise<Recorded> {
+  ): Promise<Recorded | undefined> {
+    // The owner's row, shared, as on the save path: a deletion holds it for update, so it either
+    // finished before this — and there is nothing left to write onto — or waits for this insert
+    // and removes the row together with the rest of the account.
+    if (!(await this.users.lockForShare(fields.userId))) return undefined;
     const retentionDays = await this.settings.number('history.retentionDays');
     const expiresAt = new Date(Date.now() + retentionDays * DAY_MS);
     const id = await this.repository.create({
